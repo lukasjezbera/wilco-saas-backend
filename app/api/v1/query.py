@@ -23,9 +23,7 @@ from app.schemas.query import (
 )
 from app.api.v1.auth import get_current_user
 from app.core.claude_service import ClaudeService
-from app.core.data_manager import DataManager
 from app.core.config import settings
-from app.core.configs.analyst_prompts import build_analyst_prompt
 
 
 router = APIRouter(prefix="/query", tags=["Query"])
@@ -45,11 +43,10 @@ async def execute_query(
     Execute natural language query
     
     Process:
-    1. Load tenant's datasets
-    2. Generate Python/pandas code via Claude
-    3. Execute code safely
-    4. Return results
-    5. Save to history
+    1. Generate Python/pandas code via Claude
+    2. Execute code safely
+    3. Return results
+    4. Save to history
     
     Requires: Bearer token
     """
@@ -57,80 +54,73 @@ async def execute_query(
     start_time = time.time()
     
     try:
-        # Initialize services
+        # Initialize Claude service
         claude_service = ClaudeService(api_key=settings.ANTHROPIC_API_KEY)
-        data_manager = DataManager(
-            app_root="/tmp/wilco-data",
-            db_manager=None  # We'll use our own DB
-        )
         
-        # Load available datasets for this tenant
-        # TODO: Implement tenant-specific data loading
+        # For now, no datasets (testing mode)
         dataframes = {}
         
-        # Build prompt for Claude
-        from app.core.prompt_builder import PromptBuilder
-        prompt_builder = PromptBuilder()
+        # Build simple prompt
+        prompt = f"""You are a Python data analyst. Generate Python code to answer this query:
+
+Query: {query_request.query}
+
+Requirements:
+- Use pandas and standard Python libraries
+- Store the final answer in a variable called 'result'
+- Keep it simple and direct
+- For math questions, just calculate and assign to result
+
+Example:
+Query: "What is 2 + 2?"
+Code:
+result = 2 + 2
+
+Now generate code for the user's query."""
         
-        # Get context from previous query if provided
-        context = None
-        if query_request.context_query_id:
-            context_query = db.query(QueryHistory).filter(
-                QueryHistory.id == query_request.context_query_id,
-                QueryHistory.tenant_id == current_user.tenant_id
-            ).first()
-            if context_query:
-                context = {
-                    "query": context_query.query_text,
-                    "result": context_query.result
-                }
+        # Generate code via Claude
+        generated_code = await claude_service.generate_code(prompt)
         
-        # Generate code
-        prompt = prompt_builder.build_query_prompt(
-            user_query=query_request.query,
-            available_data=dataframes,
-            context=context
-        )
-        
-        generated_code = claude_service.generate_python_code(
-            prompt=prompt,
-            max_tokens=settings.ANTHROPIC_MAX_TOKENS
-        )
-        
-        # Extract Python code
-        clean_code = claude_service.extract_python_code(generated_code)
-        if not clean_code:
-            clean_code = generated_code
+        # Clean up code (remove markdown if present)
+        clean_code = generated_code.strip()
+        if clean_code.startswith("```python"):
+            clean_code = clean_code.split("```python")[1].split("```")[0].strip()
+        elif clean_code.startswith("```"):
+            clean_code = clean_code.split("```")[1].split("```")[0].strip()
         
         # Execute code safely
-        result_df = None
+        result_value = None
         error_message = None
         success = True
+        result_rows = None
         
         try:
             # Create safe execution environment
             safe_globals = {
                 "pd": pd,
                 "datetime": datetime,
-                **dataframes  # Add loaded dataframes
+                **dataframes
             }
             safe_locals = {}
             
             # Execute generated code
             exec(clean_code, safe_globals, safe_locals)
             
-            # Get result (should be 'result' variable)
+            # Get result
             if 'result' in safe_locals:
-                result_df = safe_locals['result']
+                result_value = safe_locals['result']
             else:
                 raise ValueError("No 'result' variable in generated code")
             
-            # Convert to JSON
-            if isinstance(result_df, pd.DataFrame):
-                result_json = result_df.to_dict(orient='records')
-                result_rows = len(result_df)
+            # Convert result to JSON
+            if isinstance(result_value, pd.DataFrame):
+                result_json = result_value.to_dict(orient='records')
+                result_rows = len(result_value)
+            elif isinstance(result_value, (list, dict)):
+                result_json = result_value
+                result_rows = len(result_value) if isinstance(result_value, list) else 1
             else:
-                result_json = {"value": str(result_df)}
+                result_json = {"value": str(result_value)}
                 result_rows = 1
                 
         except Exception as e:
@@ -153,8 +143,7 @@ async def execute_query(
             execution_time_ms=execution_time_ms,
             success=success,
             error_message=error_message,
-            datasets_used=query_request.dataset_ids,
-            context_query_id=query_request.context_query_id
+            datasets_used=query_request.dataset_ids
         )
         db.add(query_history)
         db.commit()
@@ -255,58 +244,3 @@ def get_query_by_id(
         error_message=query.error_message,
         datasets_used=query.datasets_used
     )
-
-
-# ==========================================
-# AI ANALYST
-# ==========================================
-
-@router.post("/analyze", response_model=AIAnalystResponse)
-async def ai_analyst(
-    request: AIAnalystRequest,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    AI Analyst - Generate analysis of query results
-    
-    Takes query results and generates professional analysis
-    with insights and recommendations.
-    """
-    
-    start_time = time.time()
-    
-    try:
-        # Initialize Claude service
-        claude_service = ClaudeService(api_key=settings.ANTHROPIC_API_KEY)
-        
-        # Convert result data to DataFrame string for analysis
-        df_string = pd.DataFrame(request.result_data).to_string()
-        
-        # Build analyst prompt
-        prompt = build_analyst_prompt(
-            user_request=request.query,
-            dataframe=df_string,
-            company="alza",
-            format_type=request.format_type,
-            include_technical=False
-        )
-        
-        # Generate analysis
-        analysis = claude_service.generate_analysis(
-            prompt=prompt,
-            dataframe=pd.DataFrame(request.result_data)
-        )
-        
-        execution_time_ms = int((time.time() - start_time) * 1000)
-        
-        return AIAnalystResponse(
-            analysis=analysis,
-            format_type=request.format_type,
-            execution_time_ms=execution_time_ms
-        )
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AI analysis failed: {str(e)}"
-        )
