@@ -42,3 +42,4 @@ mypy==1.8.0
 
 # Monitoring & Logging
 sentry-sdk==1.40.0
+email-validator==2.3.0
