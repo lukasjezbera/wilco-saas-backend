@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import pandas as pd
 import time
-from typing import List
 from datetime import datetime
 
 from app.db.session import get_db
@@ -17,9 +16,7 @@ from app.schemas.query import (
     QueryExecuteRequest,
     QueryExecuteResponse,
     QueryHistoryResponse,
-    QueryHistoryItem,
-    AIAnalystRequest,
-    AIAnalystResponse
+    QueryHistoryItem
 )
 from app.api.v1.auth import get_current_user
 from app.core.claude_service import ClaudeService
@@ -43,7 +40,7 @@ async def execute_query(
     Execute natural language query
     
     Process:
-    1. Generate Python/pandas code via Claude
+    1. Generate Python code via Claude
     2. Execute code safely
     3. Return results
     4. Save to history
@@ -56,9 +53,6 @@ async def execute_query(
     try:
         # Initialize Claude service
         claude_service = ClaudeService(api_key=settings.ANTHROPIC_API_KEY)
-        
-        # For now, no datasets (testing mode)
-        dataframes = {}
         
         # Build simple prompt
         prompt = f"""You are a Python data analyst. Generate Python code to answer this query:
@@ -79,17 +73,14 @@ result = 2 + 2
 Now generate code for the user's query."""
         
         # Generate code via Claude
-        generated_code = await claude_service.generate_code(prompt)
+        generated_code = claude_service.generate_python_code(prompt, max_tokens=2000)
         
         # Clean up code (remove markdown if present)
-        clean_code = generated_code.strip()
-        if clean_code.startswith("```python"):
-            clean_code = clean_code.split("```python")[1].split("```")[0].strip()
-        elif clean_code.startswith("```"):
-            clean_code = clean_code.split("```")[1].split("```")[0].strip()
+        clean_code = claude_service.extract_python_code(generated_code)
+        if not clean_code:
+            clean_code = generated_code.strip()
         
         # Execute code safely
-        result_value = None
         error_message = None
         success = True
         result_rows = None
@@ -98,8 +89,7 @@ Now generate code for the user's query."""
             # Create safe execution environment
             safe_globals = {
                 "pd": pd,
-                "datetime": datetime,
-                **dataframes
+                "datetime": datetime
             }
             safe_locals = {}
             
