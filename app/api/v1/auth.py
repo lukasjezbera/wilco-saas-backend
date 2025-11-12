@@ -12,7 +12,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.models.tenant import Tenant
 from app.schemas.auth import UserSignup, UserLogin, UserWithToken, UserResponse
-from app.core.security import get_password_hash, verify_password, create_access_token, verify_token
+from app.core.security import get_password_hash, verify_password, create_access_token, decode_access_token
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -35,7 +35,9 @@ async def get_current_user(
     )
     
     try:
-        payload = verify_token(token)
+        payload = decode_access_token(token)
+        if payload is None:
+            raise credentials_exception
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
