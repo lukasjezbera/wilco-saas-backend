@@ -90,7 +90,7 @@ def signup(user_data: UserSignup, db: Session = Depends(get_db)):
         full_name=user_data.full_name,
         tenant_id=tenant.id,
         is_active=True,
-        is_admin=True,  # First user is admin
+        is_superuser=True,  # First user is admin
         created_at=datetime.utcnow()
     )
     db.add(user)
@@ -106,7 +106,7 @@ def signup(user_data: UserSignup, db: Session = Depends(get_db)):
         full_name=user.full_name,
         tenant_id=user.tenant_id,
         is_active=user.is_active,
-        is_admin=user.is_admin,
+        is_superuser=user.is_superuser,
         created_at=user.created_at,
         access_token=access_token,
         token_type="bearer"
@@ -153,7 +153,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
         full_name=user.full_name,
         tenant_id=user.tenant_id,
         is_active=user.is_active,
-        is_admin=user.is_admin,
+        is_superuser=user.is_superuser,
         created_at=user.created_at,
         access_token=access_token,
         token_type="bearer"
