@@ -177,4 +177,11 @@ def get_current_user_endpoint(
     
     Requires: Bearer token in Authorization header
     """
-    return UserResponse.model_validate(current_user)
+    return UserResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        full_name=current_user.full_name,
+        is_active=current_user.is_active,
+        is_superuser=current_user.is_superuser,
+        created_at=current_user.created_at
+    )
