@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # ==========================================
     # ANTHROPIC API
     # ==========================================
-    ANTHROPIC_API_KEY: str
+    ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
     ANTHROPIC_MAX_TOKENS: int = 2000
     
