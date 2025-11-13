@@ -23,6 +23,7 @@ from app.schemas.query import (
 from app.api.v1.auth import get_current_user
 from app.core.claude_service import ClaudeService
 from app.core.config import settings
+from app.services.prompt_service import build_business_prompt  # ← NOVÉ!
 
 
 router = APIRouter(prefix="/query", tags=["Query"])
@@ -43,7 +44,7 @@ async def execute_query(
     
     Process:
     1. Load tenant's datasets into DataFrames
-    2. Generate Python code via Claude
+    2. Generate Python code via Claude with Alza business prompts
     3. Execute code safely with datasets
     4. Return results
     5. Save to history
@@ -73,6 +74,7 @@ async def execute_query(
         # Load DataFrames
         dataframes = {}
         dataset_info = []
+        available_dataset_names = []  # ← NOVÉ!
         
         for dataset in datasets:
             try:
@@ -85,6 +87,7 @@ async def execute_query(
                 # Use original filename without extension as variable name
                 var_name = dataset.original_filename.rsplit('.', 1)[0].replace(' ', '_').replace('-', '_')
                 dataframes[var_name] = df
+                available_dataset_names.append(dataset.original_filename)  # ← NOVÉ!
                 
                 dataset_info.append({
                     "name": var_name,
@@ -101,39 +104,22 @@ async def execute_query(
         
         db.commit()
         
-        # Build prompt with dataset context
-        dataset_context = ""
-        if dataset_info:
-            dataset_context = "\n\nAvailable datasets:\n"
-            for info in dataset_info:
-                dataset_context += f"- {info['name']}: {info['rows']} rows, columns: {', '.join(info['columns'])}\n"
+        # ==========================================
+        # ⚡ NOVÉ: Použij Alza business prompt builder
+        # ==========================================
         
-        prompt = f"""You are a Python data analyst. Generate Python code to answer this query:
-
-Query: {query_request.query}
-{dataset_context}
-Requirements:
-- Use pandas for data analysis
-- Available DataFrames: {', '.join(dataframes.keys()) if dataframes else 'None'}
-- Store the final answer in a variable called 'result'
-- Keep it simple and direct
-- For calculations, use the available DataFrames
-- If no datasets are available, perform simple calculations
-
-Example with data:
-Query: "What is the total quantity sold?"
-Code:
-result = test_sales['Quantity'].sum()
-
-Example without data:
-Query: "What is 2 + 2?"
-Code:
-result = 2 + 2
-
-Now generate code for the user's query."""
+        prompt = build_business_prompt(
+            user_query=query_request.query,
+            available_datasets=available_dataset_names
+        )
+        
+        print(f"\n{'='*60}")
+        print(f"📊 Query: {query_request.query}")
+        print(f"📁 Available datasets: {', '.join(available_dataset_names)}")
+        print(f"{'='*60}\n")
         
         # Generate code via Claude
-        print(f"Generating code for query: {query_request.query}")
+        print(f"Generating code with Alza business prompts...")
         generated_code = claude_service.generate_python_code(prompt, max_tokens=2000)
         
         # Clean up code (remove markdown if present)
@@ -141,7 +127,7 @@ Now generate code for the user's query."""
         if not clean_code:
             clean_code = generated_code.strip()
         
-        print(f"Generated code:\n{clean_code}")
+        print(f"Generated code:\n{clean_code}\n")
         
         # Execute code safely
         error_message = None
@@ -185,7 +171,7 @@ Now generate code for the user's query."""
             error_message = f"Execution error: {str(e)}"
             result_json = None
             result_rows = None
-            print(f"Execution error: {e}")
+            print(f"❌ Execution error: {e}")
         
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
@@ -207,6 +193,8 @@ Now generate code for the user's query."""
         db.commit()
         db.refresh(query_history)
         
+        print(f"✅ Query executed successfully in {execution_time_ms}ms\n")
+        
         # Return response
         return QueryExecuteResponse(
             query_id=str(query_history.id),
@@ -221,7 +209,7 @@ Now generate code for the user's query."""
         )
         
     except Exception as e:
-        print(f"Query execution failed: {e}")
+        print(f"❌ Query execution failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Query execution failed: {str(e)}"
