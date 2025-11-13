@@ -1,13 +1,14 @@
 """
 Wilco SaaS - Prompt Builder Service
 Sestavuje prompty pro Claude AI podle business konfigurace
+ADAPTED FROM DESKTOP APPLICATION - Full feature parity
 """
 
 from typing import Dict, List, Any
 
 
 # ==============================================================================
-# ALZA BUSINESS CONTEXT - Import z desktop aplikace
+# ALZA BUSINESS CONTEXT
 # ==============================================================================
 
 ALZA_CONTEXT = """
@@ -43,47 +44,151 @@ SEZÓNNÍ FAKTORY:
 
 
 # ==============================================================================
-# DATA STRUCTURE INFO
+# MODULE DETECTION
 # ==============================================================================
 
-DATA_STRUCTURE_INFO = {
-    "Sales.csv": {
-        "format": "WIDE (pivoted)",
-        "description": "Data jsou v WIDE formátu - datumy jsou sloupce (01.01.2024, 01.02.2024, ...)",
-        "transformation": "MUSÍ být unpivoted (melt) na LONG formát",
-        "date_columns": "Všechny sloupce ve formátu DD.MM.YYYY",
-        "value_meaning": "Tržby v Kč bez DPH"
-    },
-    "Documents.csv": {
-        "format": "LONG",
-        "description": "Klasický long formát - každý řádek = jedna transakce"
-    },
-    "M3.csv": {
-        "format": "MIXED",
-        "description": "Kombinace dimenzí a časových sloupců"
-    }
-}
+def detect_module_type(available_datasets: List[str]) -> str:
+    """
+    Detekuje typ modulu podle dostupných datasetů.
+    
+    Returns:
+        "accounting" | "business" | "mixed"
+    """
+    has_accounting = any(d in ['PL.csv', 'OVH.csv'] for d in available_datasets)
+    has_business = any(d in ['Sales.csv', 'Documents.csv', 'M3.csv'] for d in available_datasets)
+    
+    if has_accounting and has_business:
+        return "mixed"
+    elif has_accounting:
+        return "accounting"
+    elif has_business:
+        return "business"
+    else:
+        return "generic"
 
 
 # ==============================================================================
-# BUSINESS RULES - Alza Specific
+# ACCOUNTING MODULE PROMPTS
 # ==============================================================================
 
-ALZA_BUSINESS_RULES = """
+ACCOUNTING_MODULE_PROMPT = """
+## ⚠️ CRITICAL: ACCOUNTING MODULE - RULES
+
+### 1. DATASET SELECTION (CRITICAL!):
+
+**⚠️ CRITICAL WARNING - READ THIS FIRST:**
+- "Faktury" = EXPENSE INVOICES → Use OVH.csv (NOT Sales.csv!)
+- Sales.csv is ONLY for REVENUE queries (tržby, prodej, customers)
+- OVH.csv is for EXPENSE invoice details (dodavatelé, faktury, náklady)
+- If user says "faktury" in cost context → MUST use OVH.csv!
+
+**PL.csv** = Complete P&L statement (ALL costs and revenues aggregated)
+- Has 'Account class' column (5 = costs, 6 = revenue)
+- Has Cost Center columns: 'CC-Level 1', 'CC-Level 2'
+- Has Cost Category columns: 'Acc-Level 1', 'Acc-Level 2', 'Acc-Level 3'
+- Has Analytical account column
+- Does NOT have: Vendor, ELD, Document description
+- **WIDE FORMAT** with monthly columns: '01.01.2024', '01.02.2024', etc.
+
+**USE PL.csv FOR:**
+- "celkové náklady" / "total costs"
+- "náklady střediska X" / "cost center X costs"
+- "náklady kategorie Y" / "category Y costs"
+- "účet 501 200" / "account queries"
+- ANY query WITHOUT vendor/ELD/document description!
+
+**OVH.csv** = Overhead details (EXPENSE INVOICES with vendor breakdown)
+- **WIDE FORMAT** with monthly columns: '01.01.2024', '01.02.2024', etc.
+- Each row = one invoice line item with amounts in monthly columns
+- Has 'Customer/company name' column (vendor/supplier)
+- Has 'Electronic document key' column (ELD = invoice number)
+- Has 'Document item description' column
+
+**USE OVH.csv ONLY FOR:**
+- "faktury" / "invoices" (in COST context!)
+- "dodavatel X" / "vendor X"
+- "ELD číslo" / "invoice number"
+- "faktury obsahující..." / "invoice description"
+
+### 2. WIDE FORMAT HANDLING (PL & OVH):
+
+Both PL.csv and OVH.csv use WIDE FORMAT with MONTHLY columns:
+- '01.01.2024' = CELÝ LEDEN 2024
+- '01.02.2024' = CELÝ ÚNOR 2024
+- Each column = one full month
+
+**TWO STRATEGIES:**
+
+**STRATEGY A - STAY WIDE (for simple queries):**
+```python
+# Example: "Náklady střediska Finance v lednu 2024"
+pl = PL.copy()
+pl_costs = pl[pl['Account class'] == 5].copy()  # Filter costs
+
+finance = pl_costs[
+    pl_costs['CC-Level 1'].str.contains('FINANCE', case=False, na=False)
+].copy()
+
+jan_col = '01.01.2024'
+finance[jan_col] = pd.to_numeric(finance[jan_col], errors='coerce').fillna(0)
+total_jan = finance[jan_col].sum()
+```
+
+**STRATEGY B - UNPIVOT (for trends/time-series):**
+Only use when user wants trends, YoY, MoM, or multi-month analysis.
+
+### 3. ACCOUNT CLASS FILTERING (MANDATORY for PL.csv):
+
+**Account class values:**
+- "5" = Náklady (Costs) ← PRIMARY USE
+- "6" = Výnosy (Revenue) ← Only for specific account queries
+
+**ALWAYS filter Account class = 5 unless user asks for revenue accounts!**
+
+### 4. NUMERIC DATA CLEANING:
+
+```python
+# Convert monthly columns to numeric
+for col in monthly_cols:
+    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+```
+
+### 5. EXAMPLES:
+
+```python
+# ✅ Cost center query (WIDE):
+pl_costs = PL[PL['Account class'] == 5].copy()
+finance = pl_costs[pl_costs['CC-Level 1'] == 'FINANCE']
+jan_total = finance['01.01.2024'].sum()
+
+# ✅ Vendor query (WIDE):
+ovh = OVH.copy()
+vendor_data = ovh[ovh['Customer/company name'].str.contains('KPK', case=False, na=False)]
+jan_total = vendor_data['01.01.2024'].sum()
+
+# ✅ ELD query:
+ovh = OVH.copy()
+invoice = ovh[ovh['Electronic document key'] == 'ELD5724723']
+```
+"""
+
+
+# ==============================================================================
+# BUSINESS MODULE PROMPTS  
+# ==============================================================================
+
+BUSINESS_MODULE_PROMPT = """
 ## CRITICAL BUSINESS RULES - ALZA:
 
 ### 1. B2B vs B2C Identifikace:
 **EXACT STRING MATCHING ONLY!**
-- B2B: "Customer is business customer (IN/TIN)" ← PŘESNĚ TENTO TEXT!
-- B2C: "Customer is not business customer (IN/TIN)" ← PŘESNĚ TENTO TEXT!
+- B2B: "Customer is business customer (IN/TIN)"
+- B2C: "Customer is not business customer (IN/TIN)"
 
 ```python
 # ✅ SPRÁVNĚ:
 b2b = df[df['Customer is business customer (IN/TIN)'] == 'Customer is business customer (IN/TIN)']
 b2c = df[df['Customer is business customer (IN/TIN)'] == 'Customer is not business customer (IN/TIN)']
-
-# ❌ ŠPATNĚ - NIKDY nepoužívat:
-b2b = df[df['CustomerType'] == 'B2B']  # ← Tento sloupec neexistuje!
 ```
 
 ### 2. AlzaPlus+ Členství:
@@ -105,31 +210,88 @@ non_members = df[df['AlzaPlus+'] == 'Customer is not member of AlzaPlus+ program
 merged = Sales.merge(Bridge, on='Shipping name', how='left')
 grouped = merged.groupby('ShippingType')['Tržby'].sum()
 
-# ❌ ŠPATNĚ - NIKDY negroupuj přímo podle 'Shipping name':
-grouped = Sales.groupby('Shipping name')['Tržby'].sum()  # ← ŠPATNĚ!
+# ❌ ŠPATNĚ:
+grouped = Sales.groupby('Shipping name')['Tržby'].sum()  # ← NIKDY!
 ```
 
-**Důvod:** 'Shipping name' a 'Shipping detail name' jsou POUZE pro popis/labels!
-Bridge tabulka mapuje detailní názvy → agregované typy (AlzaBox, Pobočky, Adresa)
+### 4. Sales.csv - WIDE FORMAT HANDLING:
 
-### 4. Sales.csv - WIDE Format Handling:
-**VŽDY jako první krok provést UNPIVOT (melt)!**
+**CRITICAL UNDERSTANDING:**
+- Sales.csv má sloupce: 01.01.2024, 01.02.2024, 01.03.2024, ...
+- **Každý sloupec = CELÝ MĚSÍC!** (01.01.2024 = CELÝ LEDEN 2024)
+- Dimenze (řádky): AlzaPlus+, Payment detail name, Customer is business customer (IN/TIN), Shipping name, atd.
+
+**TWO STRATEGIES:**
+
+### **STRATEGY A: STAY WIDE (for simple queries)**
+Use when user asks about ONE MONTH or YEAR:
 
 ```python
-# ✅ SPRÁVNĚ - UNPIVOT na začátku:
+# ✅ Example: "Tržby v únoru 2024"
+sales = Sales.copy()
+feb_col = '01.02.2024'
+total_feb = sales[feb_col].sum()
+
+result = pd.DataFrame({
+    'Měsíc': ['Únor 2024'],
+    'Tržby (Kč)': [f'{total_feb:,.0f}'.replace(',', ' ')]
+})
+```
+
+```python
+# ✅ Example: "Platební metody v lednu 2024"
+sales = Sales.copy()
+jan_col = '01.01.2024'
+
+payment_summary = sales.groupby('Payment detail name')[jan_col].sum().reset_index()
+payment_summary.columns = ['Platební metoda', 'Tržby (Kč)']
+payment_summary['Tržby (Kč)'] = payment_summary['Tržby (Kč)'].apply(
+    lambda x: f'{x:,.0f}'.replace(',', ' ')
+)
+payment_summary = payment_summary.sort_values('Tržby (Kč)', ascending=False)
+
+result = payment_summary
+```
+
+```python
+# ✅ Example: "B2B vs B2C v roce 2024"
 sales = Sales.copy()
 
-# Najdi date columns
+# Find all 2024 columns
+cols_2024 = [col for col in sales.columns if '2024' in col and '.' in col]
+
+# Group by B2B/B2C and sum across all months
+b2b_summary = sales.groupby('Customer is business customer (IN/TIN)')[cols_2024].sum().sum(axis=1).reset_index()
+b2b_summary.columns = ['Segment', 'Tržby 2024 (Kč)']
+b2b_summary['Tržby 2024 (Kč)'] = b2b_summary['Tržby 2024 (Kč)'].apply(
+    lambda x: f'{x:,.0f}'.replace(',', ' ')
+)
+
+result = b2b_summary
+```
+
+### **STRATEGY B: UNPIVOT (for time-series)**
+Use ONLY when user wants:
+- Time-series (trend over months)
+- YoY/MoM comparisons
+- Monthly breakdown
+- Charts over time
+
+```python
+# ✅ Example: "Měsíční vývoj tržeb v roce 2024"
+sales = Sales.copy()
+
+# Find date columns for 2024
 date_cols = [col for col in sales.columns 
              if '.' in col and any(char.isdigit() for char in col)]
+date_cols_2024 = [col for col in date_cols if '2024' in col]
 
-# Ostatní sloupce = dimensions
+# Melt
 id_cols = [col for col in sales.columns if col not in date_cols]
 
-# MELT (unpivot)
 sales_long = sales.melt(
     id_vars=id_cols,
-    value_vars=date_cols,
+    value_vars=date_cols_2024,
     var_name='Datum',
     value_name='Tržby'
 )
@@ -138,38 +300,64 @@ sales_long = sales.melt(
 sales_long['Tržby'] = pd.to_numeric(sales_long['Tržby'], errors='coerce')
 sales_long['Datum'] = pd.to_datetime(sales_long['Datum'], format='%d.%m.%Y', errors='coerce')
 
-# TEĎ můžeš filtrovat a groupovat!
+# Monthly aggregation
+monthly = sales_long.groupby('Datum')['Tržby'].sum().reset_index()
+monthly = monthly.sort_values('Datum')
+monthly['Měsíc'] = monthly['Datum'].dt.strftime('%B %Y')
+
+result = monthly[['Měsíc', 'Tržby']]
 ```
 
-### 5. Date Filtering:
+**DECISION TREE:**
+
+```
+Query contains "trend", "vývoj", "over time", "měsíční breakdown"?
+  → YES → UNPIVOT (Strategy B)
+  → NO  → STAY WIDE (Strategy A)
+
+Query asks for more than 3 months?
+  → YES → UNPIVOT (Strategy B)
+  → NO  → STAY WIDE (Strategy A)
+
+Query wants YoY or MoM comparison?
+  → YES → UNPIVOT (Strategy B)
+  → NO  → STAY WIDE (Strategy A)
+```
+
+### 5. Date Filtering & Column Selection:
+
+**FOR WIDE FORMAT (Strategy A):**
 ```python
-# ✅ Po UNPIVOT:
+# One month:
+feb_col = '01.02.2024'
+total = sales[feb_col].sum()
+
+# Year 2024:
+cols_2024 = [col for col in sales.columns if '2024' in col and '.' in col]
+total_2024 = sales[cols_2024].sum().sum()
+
+# Q1 2024:
+q1_cols = ['01.01.2024', '01.02.2024', '01.03.2024']
+total_q1 = sales[q1_cols].sum().sum()
+```
+
+**FOR UNPIVOT (Strategy B):**
+```python
+# After unpivot:
 jan_2024 = sales_long[
     (sales_long['Datum'].dt.year == 2024) &
     (sales_long['Datum'].dt.month == 1)
 ]
-
-# Pro rok 2024:
-year_2024 = sales_long[sales_long['Datum'].dt.year == 2024]
-
-# Pro Q1:
-q1 = sales_long[
-    (sales_long['Datum'].dt.year == 2024) &
-    (sales_long['Datum'].dt.month.isin([1, 2, 3]))
-]
 ```
 
-### 6. Encoding:
-**UTF-8 REQUIRED pro české znaky!**
-```python
-df = pd.read_csv('Sales.csv', encoding='utf-8', sep=';', decimal=',')
-```
+### 6. UTF-8 Encoding:
+Not needed in SaaS - DataFrames are already loaded!
 
 ### 7. Output Formatting:
 - České názvy sloupců
-- Čísla s mezerami jako tisícové oddělovače: 1 234 567
-- Procenta zaokrouhlená na 1 des. místo: 45.6%
-- Řazení SESTUPNĚ (nejvyšší hodnoty první) pokud není řečeno jinak
+- Čísla s mezerami: `f'{value:,.0f}'.replace(',', ' ')`
+- Procenta: `f'{pct:.1f}%'`
+- Řazení SESTUPNĚ pokud není řečeno jinak
 """
 
 
@@ -188,24 +376,32 @@ def build_business_prompt(
     Args:
         user_query: Dotaz uživatele v češtině
         available_datasets: Seznam dostupných CSV souborů
-        user_context: Optional - kontext uživatele (firma, module, ...)
+        user_context: Optional - kontext uživatele
     
     Returns:
         Kompletní prompt pro Claude API
     """
     
-    # Detekce dostupných datasetů
+    # Detect module type
+    module_type = detect_module_type(available_datasets)
+    
+    # Build datasets info
     datasets_info = []
     for dataset_name in available_datasets:
-        if dataset_name in DATA_STRUCTURE_INFO:
-            info = DATA_STRUCTURE_INFO[dataset_name]
-            datasets_info.append(
-                f"- {dataset_name}: {info['description']}"
-            )
-    
+        datasets_info.append(f"- {dataset_name}")
     datasets_section = "\n".join(datasets_info) if datasets_info else "Žádné datasety k dispozici."
     
-    # Sestavení finálního promptu
+    # Select appropriate module prompts
+    module_instructions = ""
+    
+    if module_type == "accounting":
+        module_instructions = ACCOUNTING_MODULE_PROMPT
+    elif module_type == "business":
+        module_instructions = BUSINESS_MODULE_PROMPT
+    elif module_type == "mixed":
+        module_instructions = ACCOUNTING_MODULE_PROMPT + "\n\n" + BUSINESS_MODULE_PROMPT
+    
+    # Build final prompt
     prompt = f"""Jsi expert Python data analytik pro Alza.cz. Generuješ Python kód pro analýzu dat.
 
 {ALZA_CONTEXT}
@@ -213,7 +409,7 @@ def build_business_prompt(
 ## DOSTUPNÉ DATASETY:
 {datasets_section}
 
-{ALZA_BUSINESS_RULES}
+{module_instructions}
 
 ## UŽIVATELSKÝ DOTAZ:
 {user_query}
@@ -245,9 +441,8 @@ result = [tvůj_dataframe]
 2. Kód musí být spustitelný bez úprav
 3. Nepoužívej markdown code blocks (```)
 4. Poslední řádek MUSÍ být: result = [tvůj_dataframe]
-5. Pro Sales.csv VŽDY začni UNPIVOT operací
-6. VŽDY řaď sestupně (highest first) pokud uživatel neřekne jinak
-7. Pro měsíční data VŽDY zahrň YoY % a MoM % pokud jsou data k dispozici
+5. VŽDY řaď sestupně (highest first) pokud uživatel neřekne jinak
+6. Pro měsíční data VŽDY zahrň YoY % a MoM % pokud jsou data k dispozici
 
 **Dostupné knihovny:**
 - pandas as pd
@@ -356,15 +551,3 @@ def get_available_datasets_from_db(user_id: str) -> List[str]:
     """
     # Placeholder - bude nahrazeno DB query
     return ["Sales.csv", "Documents.csv", "M3.csv", "Bridge_Shipping_Types.csv"]
-
-
-def detect_module_type(datasets: List[str]) -> str:
-    """
-    Detekuje typ modulu podle dostupných datasetů.
-    """
-    if "PL.csv" in datasets or "OVH.csv" in datasets:
-        return "accounting"
-    elif "Sales.csv" in datasets:
-        return "business"
-    else:
-        return "generic"
