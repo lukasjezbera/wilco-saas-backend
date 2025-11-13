@@ -1,6 +1,6 @@
 """
 Query API Endpoints
-Main query execution and history
+Main query execution and history with dataset integration
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 import pandas as pd
 import time
 from datetime import datetime
+from typing import Optional, List
 
 from app.db.session import get_db
 from app.models.user import User
 from app.models.query import QueryHistory
+from app.models.dataset import Dataset
 from app.schemas.query import (
     QueryExecuteRequest,
     QueryExecuteResponse,
@@ -37,13 +39,14 @@ async def execute_query(
     db: Session = Depends(get_db)
 ):
     """
-    Execute natural language query
+    Execute natural language query with datasets
     
     Process:
-    1. Generate Python code via Claude
-    2. Execute code safely
-    3. Return results
-    4. Save to history
+    1. Load tenant's datasets into DataFrames
+    2. Generate Python code via Claude
+    3. Execute code safely with datasets
+    4. Return results
+    5. Save to history
     
     Requires: Bearer token
     """
@@ -51,25 +54,78 @@ async def execute_query(
     start_time = time.time()
     
     try:
-        # DEBUG: Log API key info
-        print(f"DEBUG: API key length: {len(settings.ANTHROPIC_API_KEY)}")
-        print(f"DEBUG: API key starts: {settings.ANTHROPIC_API_KEY[:20]}")
-        
         # Initialize Claude service
         claude_service = ClaudeService(api_key=settings.ANTHROPIC_API_KEY)
         
-        # Build simple prompt
+        # Load datasets for this tenant
+        datasets_query = db.query(Dataset).filter(
+            Dataset.tenant_id == current_user.tenant_id
+        )
+        
+        # Filter by specific datasets if requested
+        if query_request.dataset_ids:
+            datasets_query = datasets_query.filter(
+                Dataset.id.in_(query_request.dataset_ids)
+            )
+        
+        datasets = datasets_query.all()
+        
+        # Load DataFrames
+        dataframes = {}
+        dataset_info = []
+        
+        for dataset in datasets:
+            try:
+                # Read CSV or Excel
+                if dataset.filename.endswith('.csv'):
+                    df = pd.read_csv(dataset.file_path)
+                else:
+                    df = pd.read_excel(dataset.file_path)
+                
+                # Use original filename without extension as variable name
+                var_name = dataset.original_filename.rsplit('.', 1)[0].replace(' ', '_').replace('-', '_')
+                dataframes[var_name] = df
+                
+                dataset_info.append({
+                    "name": var_name,
+                    "original_filename": dataset.original_filename,
+                    "rows": len(df),
+                    "columns": list(df.columns)
+                })
+                
+                # Update last_used_at
+                dataset.last_used_at = datetime.utcnow()
+                
+            except Exception as e:
+                print(f"Warning: Could not load dataset {dataset.original_filename}: {e}")
+        
+        db.commit()
+        
+        # Build prompt with dataset context
+        dataset_context = ""
+        if dataset_info:
+            dataset_context = "\n\nAvailable datasets:\n"
+            for info in dataset_info:
+                dataset_context += f"- {info['name']}: {info['rows']} rows, columns: {', '.join(info['columns'])}\n"
+        
         prompt = f"""You are a Python data analyst. Generate Python code to answer this query:
 
 Query: {query_request.query}
-
+{dataset_context}
 Requirements:
-- Use pandas and standard Python libraries
+- Use pandas for data analysis
+- Available DataFrames: {', '.join(dataframes.keys()) if dataframes else 'None'}
 - Store the final answer in a variable called 'result'
 - Keep it simple and direct
-- For math questions, just calculate and assign to result
+- For calculations, use the available DataFrames
+- If no datasets are available, perform simple calculations
 
-Example:
+Example with data:
+Query: "What is the total quantity sold?"
+Code:
+result = test_sales['Quantity'].sum()
+
+Example without data:
 Query: "What is 2 + 2?"
 Code:
 result = 2 + 2
@@ -77,6 +133,7 @@ result = 2 + 2
 Now generate code for the user's query."""
         
         # Generate code via Claude
+        print(f"Generating code for query: {query_request.query}")
         generated_code = claude_service.generate_python_code(prompt, max_tokens=2000)
         
         # Clean up code (remove markdown if present)
@@ -84,16 +141,19 @@ Now generate code for the user's query."""
         if not clean_code:
             clean_code = generated_code.strip()
         
+        print(f"Generated code:\n{clean_code}")
+        
         # Execute code safely
         error_message = None
         success = True
         result_rows = None
         
         try:
-            # Create safe execution environment
+            # Create safe execution environment with datasets
             safe_globals = {
                 "pd": pd,
-                "datetime": datetime
+                "datetime": datetime,
+                **dataframes  # Add all loaded DataFrames
             }
             safe_locals = {}
             
@@ -110,6 +170,9 @@ Now generate code for the user's query."""
             if isinstance(result_value, pd.DataFrame):
                 result_json = result_value.to_dict(orient='records')
                 result_rows = len(result_value)
+            elif isinstance(result_value, pd.Series):
+                result_json = result_value.to_dict()
+                result_rows = len(result_value)
             elif isinstance(result_value, (list, dict)):
                 result_json = result_value
                 result_rows = len(result_value) if isinstance(result_value, list) else 1
@@ -122,6 +185,7 @@ Now generate code for the user's query."""
             error_message = f"Execution error: {str(e)}"
             result_json = None
             result_rows = None
+            print(f"Execution error: {e}")
         
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
@@ -137,7 +201,7 @@ Now generate code for the user's query."""
             execution_time_ms=execution_time_ms,
             success=success,
             error_message=error_message,
-            datasets_used=query_request.dataset_ids
+            datasets_used=[str(d.id) for d in datasets] if datasets else None
         )
         db.add(query_history)
         db.commit()
@@ -153,10 +217,11 @@ Now generate code for the user's query."""
             result_rows=result_rows,
             execution_time_ms=execution_time_ms,
             error_message=error_message,
-            datasets_used=query_request.dataset_ids
+            datasets_used=[str(d.id) for d in datasets] if datasets else None
         )
         
     except Exception as e:
+        print(f"Query execution failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Query execution failed: {str(e)}"
