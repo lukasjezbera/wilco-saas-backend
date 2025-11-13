@@ -1,7 +1,7 @@
 """
 Query API Endpoints
 Main query execution and history with dataset integration
-MODIFIED: History caching DISABLED - queries always fresh!
+FIXED: Sends dataset structure (columns) to Claude for WIDE format support
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -45,7 +45,7 @@ async def execute_query(
     
     Process:
     1. Load tenant's datasets into DataFrames
-    2. Generate Python code via Claude with Alza business prompts
+    2. Generate Python code via Claude with Alza business prompts + dataset structure
     3. Execute code safely with datasets
     4. Return results
     5. NO CACHING - always fresh results!
@@ -125,11 +125,16 @@ async def execute_query(
                 dataframes[var_name] = df
                 available_dataset_names.append(dataset.original_filename)
                 
+                # ==========================================
+                # 🆕 CRITICAL FIX: Extract dataset structure
+                # ==========================================
                 dataset_info.append({
                     "name": var_name,
                     "original_filename": dataset.original_filename,
                     "rows": len(df),
-                    "columns": list(df.columns)
+                    "columns": list(df.columns),
+                    "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                    "sample_data": df.head(2).to_dict(orient='records')  # First 2 rows for context
                 })
                 
                 # Update last_used_at
@@ -141,22 +146,81 @@ async def execute_query(
         db.commit()
         
         # ==========================================
-        # ⚡ Use Alza business prompt builder
+        # 🆕 BUILD ENHANCED PROMPT WITH DATASET STRUCTURE
         # ==========================================
         
-        prompt = build_business_prompt(
+        # Base business prompt
+        base_prompt = build_business_prompt(
             user_query=query_request.query,
             available_datasets=available_dataset_names
         )
         
+        # Add dataset structure information
+        dataset_structure_info = "\n\n## AVAILABLE DATASETS WITH STRUCTURE:\n\n"
+        
+        for info in dataset_info:
+            dataset_structure_info += f"### {info['name']} (DataFrame variable)\n"
+            dataset_structure_info += f"- Original filename: {info['original_filename']}\n"
+            dataset_structure_info += f"- Rows: {info['rows']:,}\n"
+            dataset_structure_info += f"- Columns ({len(info['columns'])}): {', '.join(info['columns'][:20])}"
+            if len(info['columns']) > 20:
+                dataset_structure_info += f", ... ({len(info['columns']) - 20} more columns)"
+            dataset_structure_info += "\n\n"
+            
+            # Identify WIDE format datasets (many date-like columns)
+            date_columns = [col for col in info['columns'] if '.' in col and any(c.isdigit() for c in col)]
+            if len(date_columns) > 5:
+                dataset_structure_info += f"⚠️ **WIDE FORMAT DETECTED**: This dataset has {len(date_columns)} date columns in format DD.MM.YYYY\n"
+                dataset_structure_info += f"- Date range: {date_columns[0]} to {date_columns[-1]}\n"
+                dataset_structure_info += f"- Each date column contains revenue/metrics for that specific month\n"
+                dataset_structure_info += f"- Example: To get February 2024 data, use column '01.02.2024'\n"
+                dataset_structure_info += f"- Dimension columns: {', '.join([col for col in info['columns'] if col not in date_columns][:10])}\n\n"
+            
+            # Show sample data (first row only, to avoid overload)
+            if info['sample_data'] and len(info['sample_data']) > 0:
+                dataset_structure_info += f"**Sample data (first row):**\n"
+                first_row = info['sample_data'][0]
+                # Show only first 5 key-value pairs
+                for i, (key, value) in enumerate(list(first_row.items())[:5]):
+                    dataset_structure_info += f"  - {key}: {value}\n"
+                if len(first_row) > 5:
+                    dataset_structure_info += f"  - ... ({len(first_row) - 5} more columns)\n"
+            
+            dataset_structure_info += "\n---\n\n"
+        
+        # Combine prompts
+        enhanced_prompt = base_prompt + dataset_structure_info
+        
+        # Add critical instructions for WIDE format
+        enhanced_prompt += """
+## CRITICAL INSTRUCTIONS FOR WIDE FORMAT DATA:
+
+If the dataset has many date-formatted columns (DD.MM.YYYY), it is in WIDE format:
+1. **DO NOT** look for 'order_date', 'date', or 'OrderDate' columns - they don't exist!
+2. **USE** the date columns directly: '01.02.2024' for February 2024
+3. Example code for February 2024 revenue:
+   ```python
+   # ✅ CORRECT for WIDE format
+   february_revenue = df['01.02.2024'].sum()
+   
+   # ❌ WRONG - don't filter by date column
+   # february_data = df[df['order_date'].dt.month == 2]  # This will fail!
+   ```
+4. For time-series analysis, you may need to melt/unpivot the data first
+
+Remember: The DataFrame is already loaded as a variable (e.g., Sales_5k), don't use pd.read_csv()!
+"""
+        
         print(f"\n{'='*60}")
         print(f"📊 Query: {query_request.query}")
         print(f"📁 Available datasets: {', '.join(available_dataset_names)}")
+        for info in dataset_info:
+            print(f"   - {info['name']}: {info['rows']} rows, {len(info['columns'])} columns")
         print(f"{'='*60}\n")
         
         # Generate code via Claude
-        print(f"Generating code with Alza business prompts...")
-        generated_code = claude_service.generate_python_code(prompt, max_tokens=2000)
+        print(f"Generating code with enhanced dataset structure info...")
+        generated_code = claude_service.generate_python_code(enhanced_prompt, max_tokens=2000)
         
         # Clean up code (remove markdown if present)
         clean_code = claude_service.extract_python_code(generated_code)
