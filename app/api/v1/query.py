@@ -205,15 +205,16 @@ async def execute_query(
             # Get result
             if 'result' in safe_locals:
                 result_value = safe_locals['result']
+                
+                # Handle list containing single DataFrame (Claude sometimes does this)
+                if isinstance(result_value, list) and len(result_value) == 1 and isinstance(result_value[0], pd.DataFrame):
+                    result_value = result_value[0]  # Extract DataFrame from list
             else:
                 raise ValueError("No 'result' variable in generated code")
             
             # Convert result to JSON
             if isinstance(result_value, pd.DataFrame):
-                result_json = {
-                    'data': result_value.to_dict(orient='records'),
-                    'columns': list(result_value.columns)
-                }
+                result_json = result_value.to_dict(orient='records')
                 result_rows = len(result_value)
             elif isinstance(result_value, pd.Series):
                 result_json = result_value.to_dict()
