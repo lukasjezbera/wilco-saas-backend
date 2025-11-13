@@ -23,7 +23,7 @@ from app.schemas.query import (
 from app.api.v1.auth import get_current_user
 from app.core.claude_service import ClaudeService
 from app.core.config import settings
-from app.services.prompt_service import build_business_prompt
+from app.services.prompt_service import build_business_prompt  # ← NOVÉ!
 
 
 router = APIRouter(prefix="/query", tags=["Query"])
@@ -74,55 +74,20 @@ async def execute_query(
         # Load DataFrames
         dataframes = {}
         dataset_info = []
-        available_dataset_names = []
+        available_dataset_names = []  # ← NOVÉ!
         
         for dataset in datasets:
             try:
-                # ==========================================
-                # 🔧 FIX: Proper CSV loading with encoding
-                # ==========================================
+                # Read CSV or Excel
                 if dataset.filename.endswith('.csv'):
-                    # Try multiple encodings and separators
-                    try:
-                        # Czech format: UTF-8, semicolon, comma decimal
-                        df = pd.read_csv(
-                            dataset.file_path,
-                            encoding='utf-8',
-                            sep=';',
-                            decimal=',',
-                            low_memory=False
-                        )
-                    except Exception as e1:
-                        try:
-                            # Standard format: UTF-8, comma, dot decimal
-                            df = pd.read_csv(
-                                dataset.file_path,
-                                encoding='utf-8',
-                                sep=',',
-                                decimal='.',
-                                low_memory=False
-                            )
-                        except Exception as e2:
-                            try:
-                                # Windows format: Windows-1250, semicolon
-                                df = pd.read_csv(
-                                    dataset.file_path,
-                                    encoding='windows-1250',
-                                    sep=';',
-                                    decimal=',',
-                                    low_memory=False
-                                )
-                            except Exception as e3:
-                                print(f"Warning: Could not load dataset {dataset.original_filename}: {e1}")
-                                continue
+                    df = pd.read_csv(dataset.file_path)
                 else:
-                    # Excel files
                     df = pd.read_excel(dataset.file_path)
                 
                 # Use original filename without extension as variable name
                 var_name = dataset.original_filename.rsplit('.', 1)[0].replace(' ', '_').replace('-', '_')
                 dataframes[var_name] = df
-                available_dataset_names.append(dataset.original_filename)
+                available_dataset_names.append(dataset.original_filename)  # ← NOVÉ!
                 
                 dataset_info.append({
                     "name": var_name,
@@ -140,7 +105,7 @@ async def execute_query(
         db.commit()
         
         # ==========================================
-        # ⚡ Use Alza business prompt builder
+        # ⚡ NOVÉ: Použij Alza business prompt builder
         # ==========================================
         
         prompt = build_business_prompt(
@@ -161,27 +126,6 @@ async def execute_query(
         clean_code = claude_service.extract_python_code(generated_code)
         if not clean_code:
             clean_code = generated_code.strip()
-        
-        # ==========================================
-        # 🔧 FIX: Remove file reading from generated code
-        # ==========================================
-        # Replace pd.read_csv('filename') with DataFrame variable
-        for var_name, original_name in [(v, d["original_filename"]) for v, d in zip(dataframes.keys(), dataset_info)]:
-            # Replace all variants of reading the file
-            clean_code = clean_code.replace(
-                f"pd.read_csv('{original_name}'",
-                f"{var_name}.copy()  # Already loaded"
-            )
-            clean_code = clean_code.replace(
-                f'pd.read_csv("{original_name}"',
-                f'{var_name}.copy()  # Already loaded'
-            )
-            # Also handle uppercase DataFrame names
-            upper_var = var_name.upper() if var_name.islower() else var_name
-            clean_code = clean_code.replace(
-                f"{upper_var} = pd.read_csv",
-                f"# {upper_var} already loaded\n# "
-            )
         
         print(f"Generated code:\n{clean_code}\n")
         
@@ -301,20 +245,7 @@ def get_query_history(
         QueryHistory.created_at.desc()
     ).limit(limit).offset(offset).all()
     
-    # ==========================================
-    # 🔧 FIX: Convert UUID to string for Pydantic
-    # ==========================================
-    items = []
-    for q in queries:
-        item_dict = {
-            "id": str(q.id),  # Convert UUID to string
-            "query_text": q.query_text,
-            "result_rows": q.result_rows,
-            "execution_time_ms": q.execution_time_ms,
-            "success": q.success,
-            "created_at": q.created_at.isoformat() if q.created_at else None
-        }
-        items.append(QueryHistoryItem(**item_dict))
+    items = [QueryHistoryItem.model_validate(q) for q in queries]
     
     return QueryHistoryResponse(
         total=total,

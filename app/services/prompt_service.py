@@ -255,7 +255,17 @@ result = [tvůj_dataframe]
 - datetime
 
 **Dostupné DataFrames v paměti:**
-{', '.join(available_datasets)}
+{', '.join([d.replace('.csv', '').replace('.xlsx', '').replace(' ', '_').replace('-', '_') for d in available_datasets])}
+
+**CRITICAL: NIKDY nepoužívej pd.read_csv() nebo pd.read_excel()!**
+DataFrames jsou UŽ NAČTENÉ v paměti. Použij je přímo:
+```python
+# ✅ SPRÁVNĚ - DataFrame už existuje:
+sales = Sales.copy()
+
+# ❌ ŠPATNĚ - NIKDY NEPOUŽÍVAT:
+sales = pd.read_csv('Sales.csv', ...)  # ← NIKDY!
+```
 
 Začni generovat kód NYNÍ (nezapomeň na title na prvním řádku!):"""
     
