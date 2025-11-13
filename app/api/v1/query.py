@@ -1,6 +1,7 @@
 """
 Query API Endpoints
 Main query execution and history with dataset integration
+MODIFIED: History caching DISABLED - queries always fresh!
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -47,7 +48,7 @@ async def execute_query(
     2. Generate Python code via Claude with Alza business prompts
     3. Execute code safely with datasets
     4. Return results
-    5. Save to history
+    5. NO CACHING - always fresh results!
     
     Requires: Bearer token
     """
@@ -236,28 +237,17 @@ async def execute_query(
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
         
-        # Save to history
-        query_history = QueryHistory(
-            tenant_id=current_user.tenant_id,
-            user_id=current_user.id,
-            query_text=query_request.query,
-            generated_code=clean_code,
-            result=result_json,
-            result_rows=result_rows,
-            execution_time_ms=execution_time_ms,
-            success=success,
-            error_message=error_message,
-            datasets_used=[str(d.id) for d in datasets] if datasets else None
-        )
-        db.add(query_history)
-        db.commit()
-        db.refresh(query_history)
+        # ==========================================
+        # 🚫 DISABLED: History caching
+        # ==========================================
+        # NO LONGER SAVING TO DATABASE - queries always fresh!
+        # This prevents cached empty results
         
-        print(f"✅ Query executed successfully in {execution_time_ms}ms\n")
+        print(f"✅ Query executed successfully in {execution_time_ms}ms (NO CACHE)\n")
         
         # Return response
         return QueryExecuteResponse(
-            query_id=str(query_history.id),
+            query_id="no-cache",  # Temporary ID since we're not saving to DB
             success=success,
             query_text=query_request.query,
             generated_code=clean_code,
@@ -291,6 +281,7 @@ def get_query_history(
     Get user's query history
     
     Returns last N queries with pagination.
+    NOTE: Since we disabled history caching, this will return old cached queries only.
     """
     
     # Get total count
@@ -305,9 +296,7 @@ def get_query_history(
         QueryHistory.created_at.desc()
     ).limit(limit).offset(offset).all()
     
-    # ==========================================
     # 🔧 FIX: Convert UUID to string for Pydantic
-    # ==========================================
     items = []
     for q in queries:
         item_dict = {
@@ -340,6 +329,7 @@ def get_query_by_id(
     Get specific query by ID
     
     Returns full query details including generated code and results.
+    NOTE: Since we disabled history caching, this will only work for old cached queries.
     """
     
     query = db.query(QueryHistory).filter(
