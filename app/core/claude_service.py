@@ -17,7 +17,12 @@ class ClaudeService:
         Args:
             api_key: Anthropic API klíč
         """
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY is empty!")
+        
+        print(f"ClaudeService: Initializing with key length {len(api_key)}")
         self.client = anthropic.Anthropic(api_key=api_key)
+        print("ClaudeService: Client initialized successfully")
         self.model = "claude-sonnet-4-20250514"
     
     def generate_python_code(self, prompt: str, max_tokens: int = 2000) -> str:
