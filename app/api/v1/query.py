@@ -210,7 +210,10 @@ async def execute_query(
             
             # Convert result to JSON
             if isinstance(result_value, pd.DataFrame):
-                result_json = result_value.to_dict(orient='records')
+                result_json = {
+                    'data': result_value.to_dict(orient='records'),
+                    'columns': list(result_value.columns)
+                }
                 result_rows = len(result_value)
             elif isinstance(result_value, pd.Series):
                 result_json = result_value.to_dict()
