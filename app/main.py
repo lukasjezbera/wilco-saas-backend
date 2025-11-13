@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.api.v1 import auth, query, debug
+from app.api.v1 import auth, query, debug, datasets
 
 
 # ==========================================
@@ -45,6 +45,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(query.router, prefix="/api/v1")
 app.include_router(debug.router, prefix="/api/v1")
+app.include_router(datasets.router, prefix="/api/v1")
 
 
 # ==========================================
