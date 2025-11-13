@@ -51,6 +51,10 @@ async def execute_query(
     start_time = time.time()
     
     try:
+        # DEBUG: Log API key info
+        print(f"DEBUG: API key length: {len(settings.ANTHROPIC_API_KEY)}")
+        print(f"DEBUG: API key starts: {settings.ANTHROPIC_API_KEY[:20]}")
+        
         # Initialize Claude service
         claude_service = ClaudeService(api_key=settings.ANTHROPIC_API_KEY)
         
