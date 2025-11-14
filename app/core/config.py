@@ -55,7 +55,8 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:8000",
         "https://app.wilco.cz",
-        "https://wilco.cz"
+        "https://wilco.cz",
+        "https://wilco-saas-frontend.vercel.app"
     ]
     
     # ==========================================
