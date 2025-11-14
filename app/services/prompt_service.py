@@ -180,6 +180,38 @@ invoice = ovh[ovh['Electronic document key'] == 'ELD5724723']
 BUSINESS_MODULE_PROMPT = """
 ## CRITICAL BUSINESS RULES - ALZA:
 
+**⚠️⚠️⚠️ ABSOLUTELY CRITICAL - READ THIS FIRST! ⚠️⚠️⚠️**
+
+**NEVER CREATE FAKE/SIMULATED DATA! ALWAYS USE THE ACTUAL LOADED DATAFRAMES!**
+
+You MUST use the DataFrames that are already loaded in memory:
+- `Sales` - the Sales.csv data (already loaded as pandas DataFrame)
+- `Bridge_Shipping_Types` - the bridge table (already loaded)
+- `PL`, `OVH` - accounting data (if available)
+
+**❌ IF YOU DO THIS, THE QUERY WILL FAIL:**
+```python
+# ❌ Creating fake data - ABSOLUTELY FORBIDDEN!
+df = pd.DataFrame({
+    'Země': ['Česká republika', 'Slovensko'],
+    'Tržby': [450000000, 85000000]
+})
+```
+
+**✅ ALWAYS DO THIS INSTEAD:**
+```python
+# ✅ Use the actual loaded Sales DataFrame
+sales = Sales.copy()
+country_revenue = sales.groupby('Eshop site country')[month_col].sum()
+```
+
+**WHY THIS MATTERS:**
+- Simulated data returns "undefined" values and causes execution errors
+- The actual DataFrames contain REAL business data from 346k+ rows
+- Your analysis MUST reflect actual Alza business metrics
+
+---
+
 ### 1. B2B vs B2C Identifikace:
 **EXACT STRING MATCHING ONLY!**
 - B2B: "Customer is business customer (IN/TIN)"
@@ -513,34 +545,6 @@ def build_business_prompt(
 {user_query}
 
 ## INSTRUKCE PRO ODPOVĚĎ:
-
-**⚠️ CRITICAL: NEVER CREATE FAKE/SIMULATED DATA!**
-
-You MUST use the actual DataFrames that are already loaded in memory:
-- `Sales` - the Sales.csv data (already loaded as DataFrame)
-- `Bridge_Shipping_Types` - the bridge table (already loaded as DataFrame)
-- `PL` - the PL.csv data (if available)
-- `OVH` - the OVH.csv data (if available)
-
-**❌ NEVER DO THIS:**
-```python
-# ❌ Creating fake/simulated data
-df = pd.DataFrame({
-    'Země': ['Česká republika', 'Slovensko'],
-    'Tržby': [450000000, 85000000]
-})
-```
-
-**✅ ALWAYS DO THIS:**
-```python
-# ✅ Use actual loaded DataFrames
-sales = Sales.copy()
-country_revenue = sales.groupby('Eshop site country')[month_col].sum()
-```
-
-If you create simulated data, the query will return "undefined" values and fail!
-
----
 
 **CRITICAL: První řádek MUSÍ být title!**
 
