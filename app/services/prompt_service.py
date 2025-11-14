@@ -514,6 +514,34 @@ def build_business_prompt(
 
 ## INSTRUKCE PRO ODPOVĚĎ:
 
+**⚠️ CRITICAL: NEVER CREATE FAKE/SIMULATED DATA!**
+
+You MUST use the actual DataFrames that are already loaded in memory:
+- `Sales` - the Sales.csv data (already loaded as DataFrame)
+- `Bridge_Shipping_Types` - the bridge table (already loaded as DataFrame)
+- `PL` - the PL.csv data (if available)
+- `OVH` - the OVH.csv data (if available)
+
+**❌ NEVER DO THIS:**
+```python
+# ❌ Creating fake/simulated data
+df = pd.DataFrame({
+    'Země': ['Česká republika', 'Slovensko'],
+    'Tržby': [450000000, 85000000]
+})
+```
+
+**✅ ALWAYS DO THIS:**
+```python
+# ✅ Use actual loaded DataFrames
+sales = Sales.copy()
+country_revenue = sales.groupby('Eshop site country')[month_col].sum()
+```
+
+If you create simulated data, the query will return "undefined" values and fail!
+
+---
+
 **CRITICAL: První řádek MUSÍ být title!**
 
 **Formát odpovědi:**
@@ -541,6 +569,39 @@ result = [tvůj_dataframe]
 4. Poslední řádek MUSÍ být: result = [tvůj_dataframe]
 5. VŽDY řaď sestupně (highest first) pokud uživatel neřekne jinak
 6. Pro měsíční data VŽDY zahrň YoY % a MoM % pokud jsou data k dispozici
+
+**⚠️ CRITICAL: Column Formatting Order**
+
+When calculating derived columns (MoM%, YoY%, changes, deltas):
+
+**RULE: Calculate ALL numeric columns FIRST, then format at the END!**
+
+❌ WRONG ORDER (will cause "undefined"):
+```python
+# ❌ Formatting before calculating derivatives
+df['Podíl (%)'] = df['Podíl'].apply(lambda x: f'{x:.1f}%')  # Converts to string!
+df['MoM změna'] = df['Podíl (%)'].diff()  # ERROR! Can't diff strings → undefined!
+```
+
+✅ CORRECT ORDER:
+```python
+# ✅ Step 1: Calculate ALL numeric columns first
+df['MoM_change_numeric'] = df['Podíl'].diff()
+df['YoY_change_numeric'] = df['Podíl'].pct_change(12) * 100
+
+# ✅ Step 2: Format everything at the end
+df['Podíl (%)'] = df['Podíl'].apply(lambda x: f'{x:.1f}%')
+df['MoM změna (p.p.)'] = df['MoM_change_numeric'].apply(lambda x: f'{x:+.1f}p.p.' if pd.notna(x) else '-')
+df['YoY změna (%)'] = df['YoY_change_numeric'].apply(lambda x: f'{x:+.1f}%' if pd.notna(x) else '-')
+
+# ✅ Step 3: Select final columns (drop temp numeric columns)
+result = df[['Měsíc', 'Podíl (%)', 'MoM změna (p.p.)', 'YoY změna (%)']]
+```
+
+**Why this matters:**
+- Formatted strings (e.g., "32.8%") cannot be used in math operations
+- `.diff()`, `.pct_change()`, subtraction, division require numeric values
+- Always keep numeric versions until ALL calculations are done
 
 **Dostupné knihovny:**
 - pandas as pd
