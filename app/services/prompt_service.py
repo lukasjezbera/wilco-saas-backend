@@ -225,6 +225,57 @@ applepay = sales[
 
 ---
 
+**⚠️⚠️⚠️ CRITICAL: "SEGMENT" DISAMBIGUATION ⚠️⚠️⚠️**
+
+**THE WORD "SEGMENT" HAS TWO MEANINGS IN ALZA DATA:**
+
+1. **Product Segment** (Catalogue segment 1) - CO SE PRODÁVÁ:
+   - Column: `'Catalogue segment 1'`
+   - Values: "Telefony", "TV", "Počítače", "Domácí elektro", etc.
+   - Trigger words: "produkty", "zboží", "kategorie", "co se prodává", "produktové segmenty"
+
+2. **Customer Segment** (B2B vs B2C) - KDO KUPUJE:
+   - Column: `'Customer is business customer (IN/TIN)'`
+   - Values: B2B, B2C
+   - Trigger words: "zákazníci", "B2B", "B2C", "firemní", "retail", "koncový zákazník"
+
+**DEFAULT BEHAVIOR - EXTREMELY IMPORTANT:**
+**When user says just "segmenty" or "segment" WITHOUT clarification:**
+→ **ALWAYS use Product Segment ('Catalogue segment 1')**
+→ **NOT customer segment (B2B/B2C)!**
+
+Product segmentation is MORE useful for business analysis (shows what products drive revenue).
+
+**Examples:**
+
+❌ **WRONG interpretation:**
+```python
+User: "Rozdělení tržeb podle segmentů"
+Claude: Groups by 'Customer is business customer (IN/TIN)'  # ← WRONG! Returns only B2B/B2C!
+```
+
+✅ **CORRECT interpretation:**
+```python
+User: "Rozdělení tržeb podle segmentů"
+Claude: Groups by 'Catalogue segment 1'  # ← CORRECT! Returns Telefony, TV, Počítače, etc.
+
+User: "Jaké produkty se nejvíc prodávají?"
+Claude: Groups by 'Catalogue segment 1'  # ← Product categories
+
+User: "Top segmenty podle tržeb"
+Claude: Groups by 'Catalogue segment 1'  # ← Product categories
+
+User: "Rozdělení podle segmentů zákazníků"
+Claude: Groups by B2B/B2C  # ← "zákazníků" clarifies it's customer segment!
+
+User: "B2B vs B2C tržby"
+Claude: Groups by B2B/B2C  # ← Explicit customer segment request
+```
+
+**RULE:** If query mentions "segmenty" without "zákazníci/B2B/B2C" → Use 'Catalogue segment 1'!
+
+---
+
 ### 1. B2B vs B2C Identifikace:
 **EXACT STRING MATCHING ONLY!**
 - B2B: "Customer is business customer (IN/TIN)"
