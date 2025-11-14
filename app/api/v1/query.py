@@ -235,7 +235,9 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         
         print(f"Generated code:\n{clean_code}\n")
         
-        # Execute code safely
+        # ==========================================
+        # 📊 EXECUTE CODE WITH ENHANCED ERROR LOGGING
+        # ==========================================
         error_message = None
         success = True
         result_rows = None
@@ -278,10 +280,27 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
                 
         except Exception as e:
             success = False
-            error_message = f"Execution error: {str(e)}"
+            error_message = str(e)
             result_json = None
             result_rows = None
-            print(f"❌ Execution error: {e}")
+            
+            # ⚠️ ENHANCED ERROR LOGGING - Print code and error details
+            print(f"❌ Execution error: {error_message}")
+            print(f"\n{'='*60}")
+            print(f"⚠️  FAILED CODE:")
+            print(f"{'='*60}")
+            print(clean_code)
+            print(f"{'='*60}")
+            print(f"⚠️  ERROR DETAILS:")
+            print(f"{'='*60}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {error_message}")
+            
+            # Try to get line number if possible
+            import traceback
+            print(f"\nFull traceback:")
+            traceback.print_exc()
+            print(f"{'='*60}\n")
         
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
