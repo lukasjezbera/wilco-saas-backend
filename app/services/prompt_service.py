@@ -180,6 +180,51 @@ invoice = ovh[ovh['Electronic document key'] == 'ELD5724723']
 BUSINESS_MODULE_PROMPT = """
 ## CRITICAL BUSINESS RULES - ALZA:
 
+**⚠️⚠️⚠️ CRITICAL: FUZZY MATCHING FOR USER-SPECIFIED VALUES ⚠️⚠️⚠️**
+
+**ALWAYS USE CASE-INSENSITIVE AND SPACE-INSENSITIVE MATCHING!**
+
+Users may type dimension values in different formats:
+- "ApplePay", "applepay", "apple pay", "APPLE PAY"
+- "China Sourcing", "chinasourcing", "china sourcing"
+- "AlzaBox", "alzabox", "alza box"
+
+But data may have different formatting (e.g., "Apple Pay" with space).
+
+**❌ WRONG - Exact match returns 0 results:**
+```python
+# User asks: "Podíl platby ApplePay"
+applepay = sales[sales['Payment detail name'] == 'ApplePay']  # Returns 0 if data has "Apple Pay"!
+```
+
+**✅ CORRECT - Use fuzzy matching:**
+```python
+# Method 1: Normalize and contains (RECOMMENDED)
+user_input = 'ApplePay'  # or 'applepay' or 'apple pay'
+normalized = user_input.lower().replace(' ', '')
+
+applepay = sales[
+    sales['Payment detail name'].str.lower().str.replace(' ', '').str.contains(normalized, na=False)
+]
+
+# Method 2: Regex with case-insensitive
+applepay = sales[
+    sales['Payment detail name'].str.contains('apple.*pay', case=False, na=False, regex=True)
+]
+```
+
+**Apply fuzzy matching to ALL user-specified values:**
+- Payment detail name (ApplePay → Apple Pay)
+- Shipping name (alzabox → AlzaBox)
+- Catalogue segment (telefony → Telefony)
+- Sourcing (china sourcing → China Sourcing)
+- Source platform (ios → iOS)
+- ANY filter value from user query!
+
+**CRITICAL:** Never assume exact string match for user input! Always use fuzzy matching!
+
+---
+
 ### 1. B2B vs B2C Identifikace:
 **EXACT STRING MATCHING ONLY!**
 - B2B: "Customer is business customer (IN/TIN)"
