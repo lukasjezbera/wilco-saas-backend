@@ -202,7 +202,80 @@ members = df[df['AlzaPlus+'] == 'AlzaPlus+']
 non_members = df[df['AlzaPlus+'] == 'Customer is not member of AlzaPlus+ program']
 ```
 
-### 3. Shipping Methods - KRITICKÉ PRAVIDLO:
+### 3. Geographic Analysis (Země/Country):
+**CRITICAL: Column name is 'Eshop site country' (NOT 'Country' or 'Země')!**
+
+When user asks about "země", "zemí", "country", "trh", "market":
+```python
+# ✅ SPRÁVNĚ - Use 'Eshop site country':
+country_revenue = sales.groupby('Eshop site country')[month_col].sum()
+
+# ❌ ŠPATNĚ:
+country_revenue = sales.groupby('Country')[month_col].sum()  # ← Column doesn't exist!
+country_revenue = sales.groupby('Země')[month_col].sum()     # ← Column doesn't exist!
+```
+
+**Possible values:**
+- 'Česká republika' (primary market, 70-80% revenue)
+- 'Slovensko' (key expansion market)
+- 'Maďarsko' (key expansion market)
+- 'Rakousko' (new market)
+- 'Německo' (new market)
+
+**CRITICAL: Country Code Mapping**
+Users may use shortcuts/codes - ALWAYS map to full Czech names:
+
+```python
+# Define country mapping dictionary
+COUNTRY_MAP = {
+    # Czech Republic variants
+    'CZ': 'Česká republika',
+    'CR': 'Česká republika',
+    'Česko': 'Česká republika',
+    'Čechy': 'Česká republika',
+    'Czech Republic': 'Česká republika',
+    'Czech': 'Česká republika',
+    
+    # Slovakia variants
+    'SK': 'Slovensko',
+    'Slovakia': 'Slovensko',
+    
+    # Hungary variants
+    'HU': 'Maďarsko',
+    'Hungary': 'Maďarsko',
+    'Madarsko': 'Maďarsko',  # common typo
+    
+    # Austria variants
+    'AT': 'Rakousko',
+    'Austria': 'Rakousko',
+    
+    # Germany variants
+    'DE': 'Německo',
+    'Germany': 'Německo',
+    'Nemecko': 'Německo'  # common typo
+}
+
+# Example 1: Query "Tržby v CZ a SK"
+user_countries = ['CZ', 'SK']
+full_names = [COUNTRY_MAP.get(c.upper(), c) for c in user_countries]
+# Result: ['Česká republika', 'Slovensko']
+
+filtered = sales[sales['Eshop site country'].isin(full_names)]
+
+# Example 2: Query "Tržby v Čechách"
+user_input = 'Čechy'
+full_name = COUNTRY_MAP.get(user_input, user_input)
+# Result: 'Česká republika'
+
+cz_sales = sales[sales['Eshop site country'] == full_name]
+
+# Example 3: Query "Porovnej CZ vs SK vs HU"
+codes = ['CZ', 'SK', 'HU']
+countries = [COUNTRY_MAP.get(c, c) for c in codes]
+comparison = sales[sales['Eshop site country'].isin(countries)].groupby('Eshop site country')[month_col].sum()
+```
+
+### 4. Shipping Methods - KRITICKÉ PRAVIDLO:
 **VŽDY používej 'ShippingType' z Bridge tabulky pro groupování!**
 
 ```python
@@ -214,7 +287,7 @@ grouped = merged.groupby('ShippingType')['Tržby'].sum()
 grouped = Sales.groupby('Shipping name')['Tržby'].sum()  # ← NIKDY!
 ```
 
-### 4. Sales.csv - WIDE FORMAT HANDLING:
+### 5. Sales.csv - WIDE FORMAT HANDLING:
 
 **CRITICAL UNDERSTANDING:**
 - Sales.csv má sloupce: 01.01.2024, 01.02.2024, 01.03.2024, ...
@@ -251,6 +324,31 @@ payment_summary['Tržby (Kč)'] = payment_summary['Tržby (Kč)'].apply(
 payment_summary = payment_summary.sort_values('Tržby (Kč)', ascending=False)
 
 result = payment_summary
+```
+
+```python
+# ✅ Example: "Breakdown tržeb podle zemí v lednu 2024"
+sales = Sales.copy()
+jan_col = '01.01.2024'
+
+# CRITICAL: Use 'Eshop site country' (NOT 'Country'!)
+country_revenue = sales.groupby('Eshop site country')[jan_col].sum().reset_index()
+country_revenue.columns = ['Země', 'Tržby']
+
+# Calculate percentages
+total = country_revenue['Tržby'].sum()
+country_revenue['Podíl %'] = (country_revenue['Tržby'] / total * 100)
+
+# Format
+country_revenue['Tržby (Kč)'] = country_revenue['Tržby'].apply(
+    lambda x: f'{x:,.0f}'.replace(',', ' ')
+)
+country_revenue['Podíl %'] = country_revenue['Podíl %'].apply(lambda x: f'{x:.1f}%')
+
+# Sort descending
+country_revenue = country_revenue.sort_values('Tržby', ascending=False)
+
+result = country_revenue[['Země', 'Tržby (Kč)', 'Podíl %']]
 ```
 
 ```python
@@ -324,7 +422,7 @@ Query wants YoY or MoM comparison?
   → NO  → STAY WIDE (Strategy A)
 ```
 
-### 5. Date Filtering & Column Selection:
+### 6. Date Filtering & Column Selection:
 
 **FOR WIDE FORMAT (Strategy A):**
 ```python
@@ -350,10 +448,10 @@ jan_2024 = sales_long[
 ]
 ```
 
-### 6. UTF-8 Encoding:
+### 7. UTF-8 Encoding:
 Not needed in SaaS - DataFrames are already loaded!
 
-### 7. Output Formatting:
+### 8. Output Formatting:
 - České názvy sloupců
 - Čísla s mezerami: `f'{value:,.0f}'.replace(',', ' ')`
 - Procenta: `f'{pct:.1f}%'`
