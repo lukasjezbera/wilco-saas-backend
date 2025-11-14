@@ -158,7 +158,7 @@ async def execute_query(
         if query_request.context:
             context_section = f"""
 
-## CONTEXT FROM PREVIOUS QUERY:
+## ⚠️⚠️⚠️ CRITICAL CONTEXT FROM PREVIOUS QUERY ⚠️⚠️⚠️
 
 **Previous Question:** {query_request.context.get('query', 'N/A')}
 
@@ -170,8 +170,21 @@ async def execute_query(
 **Previous Result Summary:**
 {query_request.context.get('result_summary', 'N/A')}
 
-**IMPORTANT:** Use this context to understand what was already done. Build upon these results!
-The user is asking a follow-up question based on the previous analysis.
+**🔴 CRITICAL INSTRUCTIONS FOR FOLLOW-UP:**
+1. **MAINTAIN THE SAME SCOPE:** If previous query was for a specific time period (e.g., "únor 2024"), the follow-up MUST use the SAME time period!
+2. **EXTRACT FILTERS FROM PREVIOUS CODE:** Look at the previous code to identify:
+   - Which date columns were used (e.g., `date_cols = ['01.02.2024']`)
+   - What filters were applied (e.g., segment, country, customer type)
+   - What time period was analyzed
+3. **REUSE THOSE EXACT FILTERS:** Apply the same filters in your new code!
+4. **BUILD UPON RESULTS:** The user wants to drill down or pivot the SAME data, not analyze a different dataset!
+
+**Example:**
+If previous query was "Tržby v únoru 2024" and analyzed `['01.02.2024', '02.02.2024', ...]`,
+and follow-up is "Rozdělení B2B vs B2C",
+then your code MUST use the SAME February date columns, NOT all 2024 columns!
+
+**DO NOT** expand the time period unless explicitly asked!
 """
             prompt += context_section
         
