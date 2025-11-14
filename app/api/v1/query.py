@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import Optional, List
 import tempfile
 import os
+import json
+import anthropic
 
 from app.db.session import get_db
 from app.models.user import User
@@ -31,6 +33,171 @@ from app.services.prompt_service import build_business_prompt
 
 
 router = APIRouter(prefix="/query", tags=["Query"])
+
+
+# ==========================================
+# AI ANALYTIK - Business Insights Generator
+# ==========================================
+
+async def generate_business_insights(
+    query: str,
+    result_df: pd.DataFrame,
+    tenant_context: dict = None
+) -> dict:
+    """
+    Generate business insights from query results using Claude
+    
+    Args:
+        query: Original user query
+        result_df: Pandas DataFrame with results
+        tenant_context: Optional tenant-specific business context
+    
+    Returns:
+        dict with insights, recommendations, risks, opportunities
+    """
+    
+    if result_df is None or len(result_df) == 0:
+        return {"success": False, "error": "No data to analyze"}
+    
+    # Prepare data summary for Claude
+    result_summary = {
+        "rows": len(result_df),
+        "columns": list(result_df.columns),
+        "sample_data": result_df.head(10).to_dict('records'),
+    }
+    
+    # Add statistics if data is numeric
+    try:
+        stats = result_df.describe().to_dict()
+        result_summary["statistics"] = stats
+    except:
+        pass
+    
+    # Business context for Alza (can be customized per tenant)
+    business_context = tenant_context or {
+        "company": "Alza.cz",
+        "industry": "E-commerce / Retail",
+        "focus": [
+            "Tržby a revenue growth",
+            "Marže a ziskovost", 
+            "Customer segmentation (B2B vs B2C)",
+            "AlzaPlus+ program performance",
+            "Shipping optimization",
+            "Seasonal trends"
+        ],
+        "kpis": [
+            "Average Order Value (AOV)",
+            "Gross Margin %",
+            "AlzaPlus+ penetration",
+            "Shipping cost as % of revenue",
+            "Month-over-month growth"
+        ]
+    }
+    
+    # Build AI Analytik prompt
+    ai_prompt = f"""Jsi senior business analytik pro {business_context['company']}, společnost v oblasti {business_context['industry']}.
+
+**DOTAZ UŽIVATELE:**
+{query}
+
+**DATA - VÝSLEDKY ANALÝZY:**
+- Počet řádků: {result_summary['rows']}
+- Sloupce: {', '.join(result_summary['columns'])}
+
+Ukázka dat (prvních 10 řádků):
+{json.dumps(result_summary['sample_data'], ensure_ascii=False, indent=2)}
+
+**BUSINESS KONTEXT:**
+Společnost se zaměřuje na:
+{chr(10).join([f"- {item}" for item in business_context['focus']])}
+
+Klíčové metriky (KPIs):
+{chr(10).join([f"- {kpi}" for kpi in business_context['kpis']])}
+
+**TVŮJ ÚKOL:**
+Jako senior analytik poskytni **business insights** založené na těchto datech. Zaměř se na:
+
+1. **📊 Klíčová zjištění (Key Findings)** - Co data říkají? Jsou čísla dobrá/špatná? Jaké trendy vidíš?
+2. **💡 Business Doporučení** - Co by firma měla udělat? Konkrétní akční kroky s prioritou.
+3. **⚠️ Rizika & Red Flags** - Na co si dát pozor? Potenciální problémy.
+4. **🎯 Příležitosti** - Co firma nevyužívá? Kde je prostor pro růst?
+5. **🔍 Následující Kroky** - Jaké další analýzy provést? Jaká data ještě potřebujeme?
+
+**FORMÁT ODPOVĚDI - POUZE VALIDNÍ JSON:**
+
+{{
+  "summary": "Jednověté shrnutí hlavního zjištění",
+  "key_findings": [
+    "První klíčové zjištění s konkrétními čísly",
+    "Druhé klíčové zjištění"
+  ],
+  "recommendations": [
+    {{
+      "title": "Název doporučení",
+      "description": "Detailní popis co a jak udělat",
+      "priority": "high",
+      "effort": "low"
+    }}
+  ],
+  "risks": [
+    "První konkrétní riziko",
+    "Druhé riziko"
+  ],
+  "opportunities": [
+    "První konkrétní příležitost",
+    "Druhá příležitost"
+  ],
+  "next_steps": [
+    "První následující krok - konkrétní analýza",
+    "Druhý následující krok"
+  ],
+  "context_notes": "Další poznámky nebo kontext"
+}}
+
+KRITICKÉ: Odpověz POUZE validním JSON objektem, žádný další text před ani za!"""
+
+    # Call Claude API
+    try:
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        
+        message = client.messages.create(
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=2000,
+            messages=[{
+                "role": "user",
+                "content": ai_prompt
+            }]
+        )
+        
+        # Parse response
+        response_text = message.content[0].text
+        
+        # Remove markdown if present
+        response_text = response_text.replace("```json", "").replace("```", "").strip()
+        
+        # Parse JSON
+        insights = json.loads(response_text)
+        
+        print(f"✅ AI Insights generated successfully")
+        
+        return {
+            "success": True,
+            "insights": insights
+        }
+        
+    except json.JSONDecodeError as e:
+        print(f"⚠️ Failed to parse AI insights JSON: {e}")
+        print(f"Response was: {response_text[:500]}")
+        return {
+            "success": False,
+            "error": f"Failed to parse insights: {str(e)}"
+        }
+    except Exception as e:
+        print(f"⚠️ Failed to generate AI insights: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 # ==========================================
@@ -379,6 +546,23 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         
         print(f"✅ Query executed in {execution_time_ms}ms\n")
         
+        # ==========================================
+        # 🆕 GENERATE AI INSIGHTS
+        # ==========================================
+        ai_insights = None
+        if success and result_json and 'result' in locals():
+            print(f"🤖 Generating AI business insights...")
+            insights_result = await generate_business_insights(
+                query=query_request.query,
+                result_df=result,
+                tenant_context=None  # Can add per-tenant context later
+            )
+            if insights_result["success"]:
+                ai_insights = insights_result["insights"]
+                print(f"✅ AI Insights ready")
+            else:
+                print(f"⚠️ AI Insights failed: {insights_result.get('error')}")
+        
         # Return response
         return QueryExecuteResponse(
             query_id=query_id,
@@ -389,7 +573,8 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
             result_rows=result_rows,
             execution_time_ms=execution_time_ms,
             error_message=error_message,
-            datasets_used=[str(d.id) for d in datasets] if datasets else None
+            datasets_used=[str(d.id) for d in datasets] if datasets else None,
+            ai_insights=ai_insights  # 🆕 New field!
         )
         
     except Exception as e:
