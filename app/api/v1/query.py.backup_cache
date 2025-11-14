@@ -1,18 +1,14 @@
 """
 Query API Endpoints
 Main query execution and history with dataset integration
-MODIFIED: History caching DISABLED - queries always fresh!
-ADDED: Speech-to-Text transcription endpoint with OpenAI Whisper
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import pandas as pd
 import time
 from datetime import datetime
 from typing import Optional, List
-import tempfile
-import os
 
 from app.db.session import get_db
 from app.models.user import User
@@ -51,7 +47,7 @@ async def execute_query(
     2. Generate Python code via Claude with Alza business prompts
     3. Execute code safely with datasets
     4. Return results
-    5. NO CACHING - always fresh results!
+    5. Save to history
     
     Requires: Bearer token
     """
@@ -152,55 +148,6 @@ async def execute_query(
             available_datasets=available_dataset_names
         )
         
-        # ==========================================
-        # 🆕 ADD TIME-SERIES EXAMPLE FOR WIDE FORMAT
-        # ==========================================
-        time_series_example = """
-
-## IMPORTANT: MONTHLY TREND ANALYSIS IN WIDE FORMAT
-
-If user asks for monthly trends (e.g., "vývoj tržeb po měsících", "monthly revenue trend"), use this pattern:
-
-```python
-import pandas as pd
-
-# Copy DataFrame
-sales = Sales.copy()
-
-# Find all 2024 date columns (format: DD.MM.YYYY)
-date_cols_2024 = [col for col in sales.columns 
-                  if '2024' in col and '.' in col]
-
-# Sort chronologically
-date_cols_2024 = sorted(date_cols_2024, 
-                       key=lambda x: pd.to_datetime(x, format='%d.%m.%Y'))
-
-# Calculate monthly revenue
-monthly_data = []
-for month_col in date_cols_2024:
-    revenue = sales[month_col].sum()
-    monthly_data.append({
-        'Měsíc': month_col,
-        'Tržby': revenue
-    })
-
-result = pd.DataFrame(monthly_data)
-
-# Add MoM% change
-result['MoM %'] = result['Tržby'].pct_change() * 100
-
-# Format
-result['Tržby (Kč)'] = result['Tržby'].apply(lambda x: f'{x:,.0f}'.replace(',', ' '))
-result['MoM %'] = result['MoM %'].apply(lambda x: f'{x:+.1f}%' if pd.notna(x) else '-')
-
-result = result[['Měsíc', 'Tržby (Kč)', 'MoM %']]
-```
-
-CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivot, do NOT look for 'order_date' column!
-"""
-        
-        prompt += time_series_example
-        
         print(f"\n{'='*60}")
         print(f"📊 Query: {query_request.query}")
         print(f"📁 Available datasets: {', '.join(available_dataset_names)}")
@@ -238,9 +185,7 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         
         print(f"Generated code:\n{clean_code}\n")
         
-        # ==========================================
-        # 📊 EXECUTE CODE WITH ENHANCED ERROR LOGGING
-        # ==========================================
+        # Execute code safely
         error_message = None
         success = True
         result_rows = None
@@ -283,42 +228,36 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
                 
         except Exception as e:
             success = False
-            error_message = str(e)
+            error_message = f"Execution error: {str(e)}"
             result_json = None
             result_rows = None
-            
-            # ⚠️ ENHANCED ERROR LOGGING - Print code and error details
-            print(f"❌ Execution error: {error_message}")
-            print(f"\n{'='*60}")
-            print(f"⚠️  FAILED CODE:")
-            print(f"{'='*60}")
-            print(clean_code)
-            print(f"{'='*60}")
-            print(f"⚠️  ERROR DETAILS:")
-            print(f"{'='*60}")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {error_message}")
-            
-            # Try to get line number if possible
-            import traceback
-            print(f"\nFull traceback:")
-            traceback.print_exc()
-            print(f"{'='*60}\n")
+            print(f"❌ Execution error: {e}")
         
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
         
-        # ==========================================
-        # 🚫 DISABLED: History caching
-        # ==========================================
-        # NO LONGER SAVING TO DATABASE - queries always fresh!
-        # This prevents cached empty results
+        # Save to history
+        query_history = QueryHistory(
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            query_text=query_request.query,
+            generated_code=clean_code,
+            result=result_json,
+            result_rows=result_rows,
+            execution_time_ms=execution_time_ms,
+            success=success,
+            error_message=error_message,
+            datasets_used=[str(d.id) for d in datasets] if datasets else None
+        )
+        db.add(query_history)
+        db.commit()
+        db.refresh(query_history)
         
-        print(f"✅ Query executed successfully in {execution_time_ms}ms (NO CACHE)\n")
+        print(f"✅ Query executed successfully in {execution_time_ms}ms\n")
         
         # Return response
         return QueryExecuteResponse(
-            query_id="no-cache",  # Temporary ID since we're not saving to DB
+            query_id=str(query_history.id),
             success=success,
             query_text=query_request.query,
             generated_code=clean_code,
@@ -352,7 +291,6 @@ def get_query_history(
     Get user's query history
     
     Returns last N queries with pagination.
-    NOTE: Since we disabled history caching, this will return old cached queries only.
     """
     
     # Get total count
@@ -367,7 +305,9 @@ def get_query_history(
         QueryHistory.created_at.desc()
     ).limit(limit).offset(offset).all()
     
+    # ==========================================
     # 🔧 FIX: Convert UUID to string for Pydantic
+    # ==========================================
     items = []
     for q in queries:
         item_dict = {
@@ -400,7 +340,6 @@ def get_query_by_id(
     Get specific query by ID
     
     Returns full query details including generated code and results.
-    NOTE: Since we disabled history caching, this will only work for old cached queries.
     """
     
     query = db.query(QueryHistory).filter(
@@ -425,104 +364,3 @@ def get_query_by_id(
         error_message=query.error_message,
         datasets_used=query.datasets_used
     )
-
-
-# ==========================================
-# SPEECH-TO-TEXT TRANSCRIPTION
-# ==========================================
-
-@router.post("/transcribe")
-async def transcribe_audio(
-    audio: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Transcribe audio to text using OpenAI Whisper API
-    
-    Accepts audio files in formats: mp3, mp4, mpeg, mpga, m4a, wav, webm
-    Max file size: 25MB (OpenAI limit)
-    
-    Returns: {"text": "transcribed text"}
-    
-    Requires: Bearer token
-    """
-    
-    # Validate OpenAI API key
-    if not settings.OPENAI_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="OpenAI API key not configured"
-        )
-    
-    # Validate file type
-    allowed_extensions = {'.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm'}
-    file_ext = os.path.splitext(audio.filename)[1].lower()
-    
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported audio format. Allowed: {', '.join(allowed_extensions)}"
-        )
-    
-    # Check file size (25MB limit from OpenAI)
-    MAX_SIZE = 25 * 1024 * 1024  # 25MB
-    
-    try:
-        # Save uploaded file to temporary location
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
-            content = await audio.read()
-            
-            if len(content) > MAX_SIZE:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail="Audio file too large. Maximum size: 25MB"
-                )
-            
-            tmp_file.write(content)
-            tmp_file_path = tmp_file.name
-        
-        # Transcribe using OpenAI Whisper
-        try:
-            from openai import OpenAI
-            
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
-            
-            with open(tmp_file_path, 'rb') as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model=settings.OPENAI_WHISPER_MODEL,
-                    file=audio_file,
-                    language="cs"  # Czech language
-                )
-            
-            transcribed_text = transcript.text
-            
-            print(f"🎙️ Transcribed: {transcribed_text}")
-            
-            return {
-                "text": transcribed_text,
-                "success": True
-            }
-            
-        except Exception as e:
-            print(f"❌ OpenAI transcription error: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Transcription failed: {str(e)}"
-            )
-        
-        finally:
-            # Clean up temporary file
-            try:
-                os.unlink(tmp_file_path)
-            except:
-                pass
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ Transcription request failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process audio: {str(e)}"
-        )
-
