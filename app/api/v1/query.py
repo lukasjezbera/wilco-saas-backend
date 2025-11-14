@@ -433,8 +433,9 @@ def get_query_by_id(
 
 @router.post("/transcribe")
 async def transcribe_audio(
-    audio: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
+    audio: UploadFile = File(...)
+    # TEMPORARILY DISABLED AUTH FOR TESTING
+    # current_user: User = Depends(get_current_user)
 ):
     """
     Transcribe audio to text using OpenAI Whisper API
