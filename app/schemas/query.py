@@ -12,6 +12,7 @@ class QueryExecuteRequest(BaseModel):
     """Request model for executing a query"""
     query: str = Field(..., description="Natural language query")
     dataset_ids: Optional[List[str]] = Field(None, description="Optional list of dataset IDs to use")
+    context: Optional[Dict[str, Any]] = Field(None, description="Optional context from previous query (query, code, result)")
 
 
 class QueryExecuteResponse(BaseModel):

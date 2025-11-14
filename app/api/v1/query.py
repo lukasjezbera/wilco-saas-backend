@@ -153,6 +153,29 @@ async def execute_query(
         )
         
         # ==========================================
+        # 🔗 ADD CONTEXT FROM PREVIOUS QUERY
+        # ==========================================
+        if query_request.context:
+            context_section = f"""
+
+## CONTEXT FROM PREVIOUS QUERY:
+
+**Previous Question:** {query_request.context.get('query', 'N/A')}
+
+**Previous Code:**
+```python
+{query_request.context.get('code', 'N/A')}
+```
+
+**Previous Result Summary:**
+{query_request.context.get('result_summary', 'N/A')}
+
+**IMPORTANT:** Use this context to understand what was already done. Build upon these results!
+The user is asking a follow-up question based on the previous analysis.
+"""
+            prompt += context_section
+        
+        # ==========================================
         # 🆕 ADD TIME-SERIES EXAMPLE FOR WIDE FORMAT
         # ==========================================
         time_series_example = """
