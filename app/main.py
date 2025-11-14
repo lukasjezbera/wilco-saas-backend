@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.api.v1 import auth, query, datasets
-from app.utils.database_fix import apply_database_fixes
 
 
 # ==========================================
@@ -103,9 +102,6 @@ async def startup_event():
     print(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     print(f"📊 Environment: {settings.ENVIRONMENT}")
     print(f"🔗 Docs: http://localhost:8000/docs")
-    
-    # Apply database schema fixes
-    apply_database_fixes()
 
 
 @app.on_event("shutdown")
