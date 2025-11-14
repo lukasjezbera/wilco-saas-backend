@@ -180,6 +180,38 @@ invoice = ovh[ovh['Electronic document key'] == 'ELD5724723']
 BUSINESS_MODULE_PROMPT = """
 ## CRITICAL BUSINESS RULES - ALZA:
 
+**⚠️⚠️⚠️ ABSOLUTELY CRITICAL - READ THIS FIRST! ⚠️⚠️⚠️**
+
+**NEVER CREATE FAKE/SIMULATED DATA! ALWAYS USE THE ACTUAL LOADED DATAFRAMES!**
+
+You MUST use the DataFrames that are already loaded in memory:
+- `Sales` - the Sales.csv data (already loaded as pandas DataFrame)
+- `Bridge_Shipping_Types` - the bridge table (already loaded)
+- `PL`, `OVH` - accounting data (if available)
+
+**❌ IF YOU DO THIS, THE QUERY WILL FAIL:**
+```python
+# ❌ Creating fake data - ABSOLUTELY FORBIDDEN!
+df = pd.DataFrame({
+    'Země': ['Česká republika', 'Slovensko'],
+    'Tržby': [450000000, 85000000]
+})
+```
+
+**✅ ALWAYS DO THIS INSTEAD:**
+```python
+# ✅ Use the actual loaded Sales DataFrame
+sales = Sales.copy()
+country_revenue = sales.groupby('Eshop site country')[month_col].sum()
+```
+
+**WHY THIS MATTERS:**
+- Simulated data returns "undefined" values and causes execution errors
+- The actual DataFrames contain REAL business data from 346k+ rows
+- Your analysis MUST reflect actual Alza business metrics
+
+---
+
 ### 1. B2B vs B2C Identifikace:
 **EXACT STRING MATCHING ONLY!**
 - B2B: "Customer is business customer (IN/TIN)"
@@ -541,6 +573,60 @@ result = [tvůj_dataframe]
 4. Poslední řádek MUSÍ být: result = [tvůj_dataframe]
 5. VŽDY řaď sestupně (highest first) pokud uživatel neřekne jinak
 6. Pro měsíční data VŽDY zahrň YoY % a MoM % pokud jsou data k dispozici
+
+**⚠️ CRITICAL: Column Formatting Order**
+
+When calculating derived columns (MoM%, YoY%, changes, deltas):
+
+**RULE 1: Calculate ALL numeric columns FIRST, then format at the END!**
+**RULE 2: NEVER format numbers inside dictionaries during .append()!**
+
+❌ WRONG ORDER (causes "undefined"):
+```python
+# ❌ Formatting inside dictionary during append
+for month_col in date_cols:
+    monthly_data.append({
+        'Měsíc': month_name,
+        'Podíl (%)': share,  # numeric
+        'Tržby (Kč)': f'{revenue:,.0f}'.replace(',', ' ')  # ← STRING TOO EARLY!
+    })
+result = pd.DataFrame(monthly_data)
+result['MoM'] = result['Podíl (%)'].diff()  # ✅ Works
+# But now 'Tržby (Kč)' column is already string!
+```
+
+✅ CORRECT ORDER:
+```python
+# ✅ Keep ALL numbers numeric during append
+for month_col in date_cols:
+    monthly_data.append({
+        'Měsíc': month_name,
+        'Podíl': share,      # numeric
+        'Tržby': revenue,    # numeric - NO FORMATTING YET!
+        'B2B': b2b_revenue   # numeric
+    })
+
+result = pd.DataFrame(monthly_data)
+
+# ✅ Calculate derived columns on numeric data
+result['MoM_numeric'] = result['Podíl'].diff()
+result['YoY_numeric'] = result['Podíl'].pct_change(12) * 100
+
+# ✅ Format everything at the end
+result['Podíl (%)'] = result['Podíl'].apply(lambda x: f'{x:.1f}%')
+result['Tržby (Kč)'] = result['Tržby'].apply(lambda x: f'{x:,.0f}'.replace(',', ' '))
+result['B2B (Kč)'] = result['B2B'].apply(lambda x: f'{x:,.0f}'.replace(',', ' '))
+result['MoM (p.p.)'] = result['MoM_numeric'].apply(lambda x: f'{x:+.1f}p.p.' if pd.notna(x) else '-')
+
+# ✅ Select final columns (drop unformatted temp columns)
+result = result[['Měsíc', 'Podíl (%)', 'MoM (p.p.)', 'Tržby (Kč)', 'B2B (Kč)']]
+```
+
+**Why this matters:**
+- Formatted strings (e.g., "32.8%", "1 272 854") cannot be used in math operations
+- .diff(), .pct_change(), subtraction, division require numeric values
+- Always keep ALL columns numeric until ALL calculations are done
+- Format ALL columns at the very end, just before selecting final result
 
 **Dostupné knihovny:**
 - pandas as pd
