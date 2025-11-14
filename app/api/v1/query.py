@@ -485,10 +485,29 @@ async def transcribe_audio(
         # Transcribe using OpenAI Whisper
         try:
             from openai import OpenAI
+            import subprocess
             
             client = OpenAI(api_key=settings.OPENAI_API_KEY)
             
-            with open(tmp_file_path, 'rb') as audio_file:
+            # Convert WebM to WAV using ffmpeg (for better OpenAI compatibility)
+            converted_path = tmp_file_path.replace(file_ext, '.wav')
+            try:
+                subprocess.run([
+                    'ffmpeg', '-i', tmp_file_path,
+                    '-ar', '16000',  # 16kHz sample rate
+                    '-ac', '1',       # Mono
+                    '-c:a', 'pcm_s16le',  # PCM encoding
+                    converted_path
+                ], check=True, capture_output=True)
+                
+                # Use converted file
+                audio_file_path = converted_path
+            except subprocess.CalledProcessError:
+                # If conversion fails, try original file
+                print(f"⚠️ Audio conversion failed, using original format")
+                audio_file_path = tmp_file_path
+            
+            with open(audio_file_path, 'rb') as audio_file:
                 transcript = client.audio.transcriptions.create(
                     model=settings.OPENAI_WHISPER_MODEL,
                     file=audio_file,
@@ -512,9 +531,11 @@ async def transcribe_audio(
             )
         
         finally:
-            # Clean up temporary file
+            # Clean up temporary files
             try:
                 os.unlink(tmp_file_path)
+                if 'converted_path' in locals() and os.path.exists(converted_path):
+                    os.unlink(converted_path)
             except:
                 pass
     
