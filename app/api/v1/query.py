@@ -345,16 +345,42 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         execution_time_ms = int((time.time() - start_time) * 1000)
         
         # ==========================================
-        # 🚫 DISABLED: History caching
+        # ✅ SAVE TO HISTORY (only successful queries with results)
         # ==========================================
-        # NO LONGER SAVING TO DATABASE - queries always fresh!
-        # This prevents cached empty results
+        query_id = "no-cache"  # Default
         
-        print(f"✅ Query executed successfully in {execution_time_ms}ms (NO CACHE)\n")
+        if success and result_json:  # Only save successful queries with actual results
+            try:
+                # Create history record
+                history_record = QueryHistory(
+                    user_id=current_user.id,
+                    query_text=query_request.query,
+                    generated_code=clean_code,
+                    result=result_json,
+                    result_rows=result_rows,
+                    execution_time_ms=execution_time_ms,
+                    success=True,
+                    error_message=None,
+                    datasets_used=[str(d.id) for d in datasets] if datasets else None
+                )
+                db.add(history_record)
+                db.commit()
+                db.refresh(history_record)
+                
+                query_id = str(history_record.id)
+                print(f"✅ Query saved to history: {query_id}")
+                
+            except Exception as e:
+                print(f"⚠️ Failed to save history (non-critical): {e}")
+                db.rollback()
+        else:
+            print(f"⚠️ Query not saved (failed or no results)")
+        
+        print(f"✅ Query executed in {execution_time_ms}ms\n")
         
         # Return response
         return QueryExecuteResponse(
-            query_id="no-cache",  # Temporary ID since we're not saving to DB
+            query_id=query_id,
             success=success,
             query_text=query_request.query,
             generated_code=clean_code,
