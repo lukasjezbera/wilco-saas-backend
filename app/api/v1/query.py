@@ -353,7 +353,7 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
             try:
                 # Create history record
                 history_record = QueryHistory(
-                    tenant_id=current_user.id,  # Set tenant_id to user_id (single-tenant mode)
+                    tenant_id=current_user.tenant_id,  # ✅ User's tenant
                     user_id=current_user.id,
                     query_text=query_request.query,
                     generated_code=clean_code,
