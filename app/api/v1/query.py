@@ -33,6 +33,32 @@ from app.core.config import settings
 from app.services.prompt_service import build_business_prompt
 
 
+
+# ==========================================
+# AI ANALYST CHAT - Schemas
+# ==========================================
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatContext(BaseModel):
+    query_text: str
+    summary: str
+    key_findings: List[str]
+    recommendations: List[dict]
+    risks: List[str]
+    opportunities: List[str]
+
+class ChatRequest(BaseModel):
+    message: str
+    context: ChatContext
+    conversation_history: List[ChatMessage] = []
+
+class ChatResponse(BaseModel):
+    response: str
+    success: bool = True
+
 router = APIRouter(prefix="/query", tags=["Query"])
 
 
@@ -786,32 +812,6 @@ async def transcribe_audio(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process audio: {str(e)}"
         )
-
-
-# ==========================================
-# AI ANALYST CHAT - Schemas
-# ==========================================
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-class ChatContext(BaseModel):
-    query_text: str
-    summary: str
-    key_findings: List[str]
-    recommendations: List[dict]
-    risks: List[str]
-    opportunities: List[str]
-
-class ChatRequest(BaseModel):
-    message: str
-    context: ChatContext
-    conversation_history: List[ChatMessage] = []
-
-class ChatResponse(BaseModel):
-    response: str
-    success: bool = True
 
 
 # ==========================================
