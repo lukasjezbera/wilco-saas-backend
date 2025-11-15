@@ -6,6 +6,7 @@ ADDED: Speech-to-Text transcription endpoint with OpenAI Whisper
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import pandas as pd
 import time
@@ -786,3 +787,127 @@ async def transcribe_audio(
             detail=f"Failed to process audio: {str(e)}"
         )
 
+
+# ==========================================
+# AI ANALYST CHAT - Schemas
+# ==========================================
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatContext(BaseModel):
+    query_text: str
+    summary: str
+    key_findings: List[str]
+    recommendations: List[dict]
+    risks: List[str]
+    opportunities: List[str]
+
+class ChatRequest(BaseModel):
+    message: str
+    context: ChatContext
+    conversation_history: List[ChatMessage] = []
+
+class ChatResponse(BaseModel):
+    response: str
+    success: bool = True
+
+
+# ==========================================
+# AI ANALYST CHAT ENDPOINT
+# ==========================================
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_with_analyst(
+    chat_request: ChatRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Interactive chat with AI Analyst about query insights
+    
+    Accepts:
+    - message: User's question
+    - context: Insights context (summary, findings, recommendations, etc.)
+    - conversation_history: Previous messages in conversation
+    
+    Returns:
+    - response: AI analyst's answer in Czech
+    """
+    
+    try:
+        # Build system prompt with context
+        system_prompt = f"""Jsi zkušený business analytik, který pomáhá uživateli porozumět výsledkům jejich datové analýzy.
+
+**PŮVODNÍ DOTAZ:**
+{chat_request.context.query_text}
+
+**VÝSLEDKY ANALÝZY:**
+
+Shrnutí:
+{chat_request.context.summary}
+
+Klíčová zjištění:
+{chr(10).join(f"- {finding}" for finding in chat_request.context.key_findings)}
+
+Doporučení:
+{chr(10).join(f"- {rec.get('title', '')}: {rec.get('description', '')}" for rec in chat_request.context.recommendations)}
+
+Rizika:
+{chr(10).join(f"- {risk}" for risk in chat_request.context.risks)}
+
+Příležitosti:
+{chr(10).join(f"- {opp}" for opp in chat_request.context.opportunities)}
+
+**TVŮJ ÚKOL:**
+Uživatel se ptá na upřesňující otázky k této analýze. Odpovídej:
+- V češtině
+- Stručně a jasně
+- S konkrétními čísly a fakty z analýzy
+- Business-focused (zaměř se na akce a dopady)
+- Pokud informace v kontextu není, upřímně to řekni
+
+Buď profesionální, ale přátelský. Cílem je pomoci uživateli lépe pochopit data a udělat správná rozhodnutí.
+"""
+
+        # Build messages array
+        messages = []
+        
+        # Add conversation history
+        for msg in chat_request.conversation_history:
+            messages.append({
+                "role": msg.role,
+                "content": msg.content
+            })
+        
+        # Add current message
+        messages.append({
+            "role": "user",
+            "content": chat_request.message
+        })
+        
+        # Call Claude API
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1500,
+            system=system_prompt,
+            messages=messages
+        )
+        
+        assistant_response = response.content[0].text
+        
+        print(f"💬 AI Analyst Chat - User: {chat_request.message[:50]}... → AI: {assistant_response[:50]}...")
+        
+        return ChatResponse(
+            response=assistant_response,
+            success=True
+        )
+    
+    except Exception as e:
+        print(f"❌ AI Analyst Chat error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get AI response: {str(e)}"
+        )
