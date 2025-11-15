@@ -718,7 +718,7 @@ def get_query_by_id(
 
 @router.post("/transcribe")
 async def transcribe_audio(
-    audio: UploadFile = File(...)
+    file: UploadFile = File(...)
     # TEMPORARILY DISABLED AUTH FOR TESTING
     # current_user: User = Depends(get_current_user)
 ):
@@ -742,7 +742,7 @@ async def transcribe_audio(
     
     # Validate file type
     allowed_extensions = {'.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm'}
-    file_ext = os.path.splitext(audio.filename)[1].lower()
+    file_ext = os.path.splitext(file.filename)[1].lower()
     
     if file_ext not in allowed_extensions:
         raise HTTPException(
@@ -756,7 +756,7 @@ async def transcribe_audio(
     try:
         # Save uploaded file to temporary location
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
-            content = await audio.read()
+            content = await file.read()
             
             if len(content) > MAX_SIZE:
                 raise HTTPException(
