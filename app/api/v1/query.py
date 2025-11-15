@@ -550,7 +550,7 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         # 🆕 GENERATE AI INSIGHTS
         # ==========================================
         ai_insights = None
-        if success and result_json and 'result' in locals():
+        if success and result_json:
             print(f"🤖 Generating AI business insights...")
             insights_result = await generate_business_insights(
                 query=query_request.query,
