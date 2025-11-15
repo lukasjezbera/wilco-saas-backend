@@ -656,6 +656,44 @@ sales = Sales.copy()
 sales = pd.read_csv('Sales.csv', ...)  # ← NIKDY!
 ```
 
+**🚨 CRITICAL WARNING: NEVER SIMULATE OR FABRICATE DATA! 🚨**
+
+**ABSOLUTE PROHIBITION - READ CAREFULLY:**
+- You MUST ALWAYS use actual data from the loaded DataFrames above
+- You MUST NEVER create fake/simulated/example data
+- You MUST NEVER use hardcoded lists like `[{{'Měsíc': 'Leden', 'Tržby': 123}}]`
+- If you don't have data for a query, say so - DON'T MAKE IT UP!
+
+**❌ ABSOLUTELY FORBIDDEN - These will cause CRITICAL ERRORS:**
+```python
+# ❌ NEVER DO THIS - Simulated data:
+monthly_data = [
+    {{'Měsíc': 'Leden 2024', 'Tržby': 850000000}},  # ← FAKE DATA!
+    {{'Měsíc': 'Únor 2024', 'Tržby': 920000000}},
+]
+df = pd.DataFrame(monthly_data)  # ← ABSOLUTELY FORBIDDEN!
+
+# ❌ NEVER DO THIS - Hardcoded values:
+yoy_changes = [-5.2, 3.1, 7.8, 12.5]  # ← FAKE DATA!
+```
+
+**✅ ALWAYS DO THIS - Use actual datasets:**
+```python
+# ✅ CORRECT - Use loaded DataFrames:
+sales = Sales.copy()
+date_cols_2024 = [col for col in sales.columns if '2024' in col]
+monthly_revenue = sales[date_cols_2024].sum()
+
+# ✅ CORRECT - Calculate from real data:
+yoy_2023 = sales[date_cols_2023].sum()
+yoy_2024 = sales[date_cols_2024].sum()
+yoy_pct = ((yoy_2024 - yoy_2023) / yoy_2023) * 100
+```
+
+**THE RULE IS ABSOLUTE:**
+Every single number in your output MUST come from the actual DataFrames.
+If the data doesn't exist, return an error message - NEVER fabricate it!
+
 Začni generovat kód NYNÍ (nezapomeň na title na prvním řádku!):"""
     
     return prompt
