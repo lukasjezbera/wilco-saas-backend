@@ -2,7 +2,7 @@
 Query API Endpoints
 Main query execution and history with dataset integration
 MODIFIED: History caching DISABLED - queries always fresh!
-ADDED: Speech-to-Text transcription endpoint with OpenAI Whisper
+ADDED: Speech-to-Text transcription endpoint with OpenAI Whisper + ffmpeg conversion
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
@@ -31,8 +31,6 @@ from app.api.v1.auth import get_current_user
 from app.core.claude_service import ClaudeService
 from app.core.config import settings
 from app.services.prompt_service import build_business_prompt
-
-
 
 # ==========================================
 # AI ANALYST CHAT - Schemas
@@ -724,6 +722,7 @@ async def transcribe_audio(
 ):
     """
     Transcribe audio to text using OpenAI Whisper API
+    WITH FFMPEG CONVERSION FOR WEBM
     
     Accepts audio files in formats: mp3, mp4, mpeg, mpga, m4a, wav, webm
     Max file size: 25MB (OpenAI limit)
@@ -753,6 +752,8 @@ async def transcribe_audio(
     # Check file size (25MB limit from OpenAI)
     MAX_SIZE = 25 * 1024 * 1024  # 25MB
     
+    mp3_path = None  # Track converted file for cleanup
+    
     try:
         # Save uploaded file to temporary location
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
@@ -767,18 +768,46 @@ async def transcribe_audio(
             tmp_file.write(content)
             tmp_file_path = tmp_file.name
         
+        # Convert WebM to MP3 if needed (OpenAI doesn't support WebM well)
+        if file_ext == '.webm':
+            print(f"🔄 Converting WebM to MP3...")
+            mp3_path = tmp_file_path.replace('.webm', '.mp3')
+            
+            try:
+                import ffmpeg
+                
+                # Convert using ffmpeg
+                (
+                    ffmpeg
+                    .input(tmp_file_path)
+                    .output(mp3_path, acodec='libmp3lame', audio_bitrate='128k')
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True)
+                )
+                
+                print(f"✅ Converted to MP3: {mp3_path}")
+                
+                # Use converted file for transcription
+                transcription_file = mp3_path
+                
+            except Exception as conv_err:
+                print(f"⚠️ FFmpeg conversion failed: {conv_err}")
+                print(f"Trying with original WebM file...")
+                transcription_file = tmp_file_path
+        else:
+            transcription_file = tmp_file_path
+        
         # Transcribe using OpenAI Whisper
         try:
             from openai import OpenAI
             
             client = OpenAI(api_key=settings.OPENAI_API_KEY)
             
-            # Try WebM directly - OpenAI Whisper may accept it
-            with open(tmp_file_path, 'rb') as audio_file:
+            with open(transcription_file, 'rb') as audio_file:
                 transcript = client.audio.transcriptions.create(
                     model=settings.OPENAI_WHISPER_MODEL,
                     file=audio_file,
-                    language="cs"  # Czech language
+                    language="cs"
                 )
             
             transcribed_text = transcript.text
@@ -798,9 +827,11 @@ async def transcribe_audio(
             )
         
         finally:
-            # Clean up temporary file
+            # Clean up temporary files
             try:
                 os.unlink(tmp_file_path)
+                if mp3_path and os.path.exists(mp3_path):
+                    os.unlink(mp3_path)
             except:
                 pass
     
@@ -809,8 +840,8 @@ async def transcribe_audio(
     except Exception as e:
         print(f"❌ Transcription request failed: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process audio: {str(e)}"
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e)
         )
 
 
