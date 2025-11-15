@@ -6,6 +6,7 @@ Entry point for Wilco SaaS Backend
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import re
 
 from app.core.config import settings
 from app.api.v1 import auth, query, datasets
@@ -25,12 +26,30 @@ app = FastAPI(
 
 
 # ==========================================
-# CORS MIDDLEWARE
+# CORS MIDDLEWARE - WITH VERCEL SUPPORT
 # ==========================================
 
+# Add all static origins
+cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "https://app.wilco.cz",
+    "https://wilco.cz",
+]
+
+# Add Vercel domains dynamically
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app",  # Allow all Vercel deployments
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add static origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -102,6 +121,7 @@ async def startup_event():
     print(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     print(f"📊 Environment: {settings.ENVIRONMENT}")
     print(f"🔗 Docs: http://localhost:8000/docs")
+    print(f"✅ CORS enabled for Vercel deployments")
 
 
 @app.on_event("shutdown")
