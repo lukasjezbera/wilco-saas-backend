@@ -41,6 +41,7 @@ class QueryExecuteRequest(BaseModel):
     query: str = Field(..., description="Natural language query")
     dataset_ids: Optional[List[str]] = Field(None, description="Optional list of dataset IDs to use")
     context: Optional[Dict[str, Any]] = Field(None, description="Optional context from previous query (query, code, result)")
+    generate_insights: bool = Field(False, description="Generate AI business insights (optional, adds ~30s)")
 
 
 class QueryExecuteResponse(BaseModel):

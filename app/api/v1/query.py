@@ -547,17 +547,17 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         print(f"✅ Query executed in {execution_time_ms}ms\n")
         
         # ==========================================
-        # 🆕 GENERATE AI INSIGHTS
+        # 🆕 GENERATE AI INSIGHTS (ON-DEMAND ONLY)
         # ==========================================
         ai_insights = None
-        if success and result_json:
+        if success and result_json and query_request.generate_insights:  # ← Only when user requests!
             # Get DataFrame for analysis (before JSON conversion)
             try:
                 # result_value is the DataFrame we extracted from exec
                 insights_df = result_value if isinstance(result_value, pd.DataFrame) else None
                 
                 if insights_df is not None:
-                    print(f"🤖 Generating AI business insights...")
+                    print(f"🤖 Generating AI business insights (on-demand)...")
                     insights_result = await generate_business_insights(
                         query=query_request.query,
                         result_df=insights_df,
@@ -570,6 +570,8 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
                         print(f"⚠️ AI Insights failed: {insights_result.get('error')}")
             except Exception as e:
                 print(f"⚠️ AI Insights generation error: {e}")
+        elif success and result_json and not query_request.generate_insights:
+            print(f"ℹ️ AI Insights skipped (not requested)")
         
         # Return response
         return QueryExecuteResponse(
