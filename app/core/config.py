@@ -56,7 +56,10 @@ class Settings(BaseSettings):
         "http://localhost:8000",
         "https://app.wilco.cz",
         "https://wilco.cz",
-        "https://wilco-saas-frontend.vercel.app"
+        "https://wilco-saas-frontend.vercel.app",
+        # Vercel preview deployments
+        "https://wilco-saas-frontend-git-main-lukass-projects-d04dcf3d.vercel.app",
+        "https://wilco-saas-frontend-lukass-projects-d04dcf3d.vercel.app",
     ]
     
     # ==========================================
