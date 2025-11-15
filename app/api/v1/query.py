@@ -551,17 +551,25 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         # ==========================================
         ai_insights = None
         if success and result_json:
-            print(f"🤖 Generating AI business insights...")
-            insights_result = await generate_business_insights(
-                query=query_request.query,
-                result_df=result,
-                tenant_context=None  # Can add per-tenant context later
-            )
-            if insights_result["success"]:
-                ai_insights = insights_result["insights"]
-                print(f"✅ AI Insights ready")
-            else:
-                print(f"⚠️ AI Insights failed: {insights_result.get('error')}")
+            # Get DataFrame for analysis (before JSON conversion)
+            try:
+                # result_value is the DataFrame we extracted from exec
+                insights_df = result_value if isinstance(result_value, pd.DataFrame) else None
+                
+                if insights_df is not None:
+                    print(f"🤖 Generating AI business insights...")
+                    insights_result = await generate_business_insights(
+                        query=query_request.query,
+                        result_df=insights_df,
+                        tenant_context=None  # Can add per-tenant context later
+                    )
+                    if insights_result["success"]:
+                        ai_insights = insights_result["insights"]
+                        print(f"✅ AI Insights ready")
+                    else:
+                        print(f"⚠️ AI Insights failed: {insights_result.get('error')}")
+            except Exception as e:
+                print(f"⚠️ AI Insights generation error: {e}")
         
         # Return response
         return QueryExecuteResponse(
