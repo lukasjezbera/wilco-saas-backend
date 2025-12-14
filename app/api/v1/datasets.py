@@ -1,11 +1,11 @@
 """
 Dataset API Endpoints
-Upload, list, delete datasets
+Upload, list, delete, preview datasets
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import pandas as pd
 import hashlib
 import os
@@ -52,7 +52,7 @@ async def upload_dataset(
     file_content = await file.read()
     file_size = len(file_content)
     
-    # Validate file size (max 100MB)
+    # Validate file size (max 200MB)
     if file_size > settings.MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -90,13 +90,28 @@ async def upload_dataset(
     # Read dataset metadata
     try:
         if file_ext == '.csv':
-            df = pd.read_csv(file_path, nrows=5)  # Just peek
+            # Try European format first (semicolon delimiter, comma decimal)
+            try:
+                df = pd.read_csv(
+                    file_path, 
+                    nrows=5, 
+                    sep=';', 
+                    decimal=',', 
+                    encoding='utf-8'
+                )
+            except:
+                # Fallback to standard CSV format (comma delimiter, dot decimal)
+                df = pd.read_csv(
+                    file_path, 
+                    nrows=5, 
+                    encoding='utf-8'
+                )
         else:
             df = pd.read_excel(file_path, nrows=5)
         
         # Get full row count
         if file_ext == '.csv':
-            row_count = sum(1 for _ in open(file_path)) - 1  # Subtract header
+            row_count = sum(1 for _ in open(file_path, encoding='utf-8')) - 1  # Subtract header
         else:
             row_count = len(pd.read_excel(file_path))
         
@@ -161,10 +176,296 @@ def list_datasets(
                 "size_mb": round(d.file_size_bytes / (1024 * 1024), 2),
                 "rows": d.rows,
                 "columns": list(d.columns.keys()) if d.columns else [],
-                "uploaded_at": d.uploaded_at.isoformat()
+                "column_types": d.columns if d.columns else {},
+                "uploaded_at": d.uploaded_at.isoformat(),
+                "last_used_at": d.last_used_at.isoformat() if d.last_used_at else None
             }
             for d in datasets
         ]
+    }
+
+
+# ==========================================
+# GET DATASET DETAIL
+# ==========================================
+
+@router.get("/{dataset_id}")
+def get_dataset(
+    dataset_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get dataset details by ID"""
+    
+    dataset = db.query(Dataset).filter(
+        Dataset.id == dataset_id,
+        Dataset.tenant_id == current_user.tenant_id
+    ).first()
+    
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found"
+        )
+    
+    return {
+        "id": str(dataset.id),
+        "filename": dataset.original_filename,
+        "size_mb": round(dataset.file_size_bytes / (1024 * 1024), 2),
+        "rows": dataset.rows,
+        "columns": list(dataset.columns.keys()) if dataset.columns else [],
+        "column_types": dataset.columns if dataset.columns else {},
+        "uploaded_at": dataset.uploaded_at.isoformat(),
+        "last_used_at": dataset.last_used_at.isoformat() if dataset.last_used_at else None
+    }
+
+
+# ==========================================
+# 🆕 DATASET PREVIEW - First N rows
+# ==========================================
+
+@router.get("/{dataset_id}/preview")
+def get_dataset_preview(
+    dataset_id: str,
+    rows: int = 3,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get dataset preview with headers and first N rows
+    
+    Args:
+        dataset_id: Dataset UUID
+        rows: Number of rows to preview (default 3, max 100)
+    
+    Returns:
+        - columns: List of column names
+        - column_types: Dict of column name -> data type
+        - preview_data: First N rows as list of dicts
+        - total_rows: Total row count
+        - metadata: File info (size, uploaded_at, etc.)
+    """
+    
+    # Limit rows to prevent abuse
+    rows = min(rows, 100)
+    
+    # Get dataset from DB
+    dataset = db.query(Dataset).filter(
+        Dataset.id == dataset_id,
+        Dataset.tenant_id == current_user.tenant_id
+    ).first()
+    
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found"
+        )
+    
+    # Check if file exists
+    if not os.path.exists(dataset.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset file not found on disk. Please re-upload."
+        )
+    
+    # Read preview data
+    try:
+        file_ext = os.path.splitext(dataset.original_filename)[1].lower()
+        
+        if file_ext == '.csv':
+            # Try European format first (semicolon delimiter, comma decimal)
+            try:
+                df = pd.read_csv(
+                    dataset.file_path,
+                    nrows=rows,
+                    sep=';',
+                    decimal=',',
+                    encoding='utf-8',
+                    low_memory=False
+                )
+                # Check if we got reasonable data (more than 1 column)
+                if len(df.columns) <= 1:
+                    raise ValueError("Only 1 column detected, trying different format")
+            except:
+                # Fallback to standard CSV format
+                try:
+                    df = pd.read_csv(
+                        dataset.file_path,
+                        nrows=rows,
+                        encoding='utf-8',
+                        low_memory=False
+                    )
+                except:
+                    # Try Windows encoding
+                    df = pd.read_csv(
+                        dataset.file_path,
+                        nrows=rows,
+                        encoding='windows-1250',
+                        sep=';',
+                        decimal=',',
+                        low_memory=False
+                    )
+        else:
+            df = pd.read_excel(dataset.file_path, nrows=rows)
+        
+        # Convert to preview format
+        columns = df.columns.tolist()
+        column_types = {col: str(dtype) for col, dtype in df.dtypes.items()}
+        
+        # Convert DataFrame to list of dicts, handling NaN values
+        preview_data = df.fillna("").to_dict(orient='records')
+        
+        # Format values for display
+        for row in preview_data:
+            for key, value in row.items():
+                if pd.isna(value):
+                    row[key] = ""
+                elif isinstance(value, float):
+                    # Format large numbers with spaces
+                    if abs(value) >= 1000:
+                        row[key] = f"{value:,.0f}".replace(",", " ")
+                    else:
+                        row[key] = f"{value:.2f}" if value % 1 != 0 else str(int(value))
+                else:
+                    row[key] = str(value)
+        
+        return {
+            "id": str(dataset.id),
+            "filename": dataset.original_filename,
+            "columns": columns,
+            "column_types": column_types,
+            "column_count": len(columns),
+            "preview_data": preview_data,
+            "preview_rows": len(preview_data),
+            "total_rows": dataset.rows,
+            "metadata": {
+                "size_mb": round(dataset.file_size_bytes / (1024 * 1024), 2),
+                "uploaded_at": dataset.uploaded_at.isoformat(),
+                "last_used_at": dataset.last_used_at.isoformat() if dataset.last_used_at else None
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ Error reading dataset preview: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read dataset: {str(e)}"
+        )
+
+
+# ==========================================
+# 🆕 LIST ALL DATASETS WITH PREVIEW
+# ==========================================
+
+@router.get("/all/with-preview")
+def list_datasets_with_preview(
+    preview_rows: int = 3,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List all datasets with preview data included
+    
+    This is a convenience endpoint that returns all datasets
+    with their preview data in a single request.
+    
+    Args:
+        preview_rows: Number of rows to include in preview (default 3, max 10)
+    
+    Returns:
+        List of datasets with preview data
+    """
+    
+    # Limit preview rows
+    preview_rows = min(preview_rows, 10)
+    
+    datasets = db.query(Dataset).filter(
+        Dataset.tenant_id == current_user.tenant_id
+    ).order_by(Dataset.uploaded_at.desc()).all()
+    
+    result = []
+    
+    for dataset in datasets:
+        dataset_info = {
+            "id": str(dataset.id),
+            "filename": dataset.original_filename,
+            "size_mb": round(dataset.file_size_bytes / (1024 * 1024), 2),
+            "rows": dataset.rows,
+            "columns": list(dataset.columns.keys()) if dataset.columns else [],
+            "column_types": dataset.columns if dataset.columns else {},
+            "uploaded_at": dataset.uploaded_at.isoformat(),
+            "last_used_at": dataset.last_used_at.isoformat() if dataset.last_used_at else None,
+            "preview_data": None,
+            "preview_error": None
+        }
+        
+        # Try to load preview data
+        if os.path.exists(dataset.file_path):
+            try:
+                file_ext = os.path.splitext(dataset.original_filename)[1].lower()
+                
+                if file_ext == '.csv':
+                    try:
+                        df = pd.read_csv(
+                            dataset.file_path,
+                            nrows=preview_rows,
+                            sep=';',
+                            decimal=',',
+                            encoding='utf-8',
+                            low_memory=False
+                        )
+                        if len(df.columns) <= 1:
+                            raise ValueError("Retry with different format")
+                    except:
+                        try:
+                            df = pd.read_csv(
+                                dataset.file_path,
+                                nrows=preview_rows,
+                                encoding='utf-8',
+                                low_memory=False
+                            )
+                        except:
+                            df = pd.read_csv(
+                                dataset.file_path,
+                                nrows=preview_rows,
+                                encoding='windows-1250',
+                                sep=';',
+                                decimal=',',
+                                low_memory=False
+                            )
+                else:
+                    df = pd.read_excel(dataset.file_path, nrows=preview_rows)
+                
+                # Convert to preview format
+                preview_data = df.fillna("").to_dict(orient='records')
+                
+                # Format values
+                for row in preview_data:
+                    for key, value in row.items():
+                        if pd.isna(value):
+                            row[key] = ""
+                        elif isinstance(value, float):
+                            if abs(value) >= 1000:
+                                row[key] = f"{value:,.0f}".replace(",", " ")
+                            else:
+                                row[key] = f"{value:.2f}" if value % 1 != 0 else str(int(value))
+                        else:
+                            row[key] = str(value)
+                
+                dataset_info["preview_data"] = preview_data
+                dataset_info["columns"] = df.columns.tolist()
+                dataset_info["column_types"] = {col: str(dtype) for col, dtype in df.dtypes.items()}
+                
+            except Exception as e:
+                dataset_info["preview_error"] = str(e)
+        else:
+            dataset_info["preview_error"] = "File not found on disk"
+        
+        result.append(dataset_info)
+    
+    return {
+        "total": len(result),
+        "datasets": result
     }
 
 
