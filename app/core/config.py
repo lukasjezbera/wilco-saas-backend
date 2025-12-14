@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # ==========================================
     # FILE UPLOAD
     # ==========================================
-    MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100MB
+    MAX_UPLOAD_SIZE: int = 200 * 1024 * 1024  # 200MB
     ALLOWED_EXTENSIONS: set = {".csv", ".xlsx", ".xls"}
     UPLOAD_DIR: str = "data/uploads"
     

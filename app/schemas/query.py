@@ -2,6 +2,7 @@
 Query schemas for request/response validation
 FIXED: result field accepts both List and Dict
 ADDED: AI Insights schemas and field in QueryExecuteResponse
+UPDATED: Added raw_analysis field for markdown output
 """
 
 from pydantic import BaseModel, Field
@@ -23,12 +24,13 @@ class AIRecommendation(BaseModel):
 
 class AIInsights(BaseModel):
     """AI-generated business insights from query results"""
-    summary: str
-    key_findings: List[str]
-    recommendations: List[AIRecommendation]
-    risks: List[str]
-    opportunities: List[str]
-    next_steps: List[str]
+    raw_analysis: Optional[str] = None  # 🆕 NEW: Raw markdown analysis
+    summary: Optional[str] = None  # Made optional for backward compat
+    key_findings: List[str] = []
+    recommendations: List[AIRecommendation] = []
+    risks: List[str] = []
+    opportunities: List[str] = []
+    next_steps: List[str] = []
     context_notes: Optional[str] = None
 
 
@@ -55,7 +57,10 @@ class QueryExecuteResponse(BaseModel):
     execution_time_ms: int
     error_message: Optional[str] = None
     datasets_used: Optional[List[str]] = None
-    ai_insights: Optional[AIInsights] = None  # 🆕 NEW FIELD!
+    ai_insights: Optional[AIInsights] = None  # 🆕 Updated with raw_analysis support
+    metadata: Optional[Dict[str, Any]] = None  # 🆕 Period validation metadata
+    periodValidationFailed: Optional[bool] = None  # 🆕 Period validation failure flag
+    hasMetadata: Optional[bool] = None  # 🆕 Metadata availability flag
 
     class Config:
         from_attributes = True

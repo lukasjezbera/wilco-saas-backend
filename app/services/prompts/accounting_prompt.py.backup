@@ -1,0 +1,134 @@
+"""
+Wilco SaaS - Accounting Prompt Module (OPTIMIZED)
+Instructions for PL.csv, Overhead.csv, HeadCount.csv
+"""
+
+ACCOUNTING_INSTRUCTIONS = """
+## ACCOUNTING ECOSYSTEM RULES
+
+### DATASETS:
+- **PL.csv** = Profit & Loss (výsledovka) - hierarchical
+- **Overhead.csv** = Overhead expenses (režijní náklady)
+- **HeadCount.csv** = Employee counts (počty zaměstnanců)
+
+All use WIDE format with monthly columns.
+
+---
+
+### 1. P&L HIERARCHY:
+**Key column:** `'Úroveň / Level'` (1-6, where 1 = top aggregates)
+
+```python
+# Level 1 = main aggregates (Tržby, EBITDA, Čistý zisk)
+# Level 6 = most detailed items
+
+pl = PL.copy()
+top_level = pl[pl['Úroveň / Level'] == 1]  # Main categories only
+detailed = pl[pl['Úroveň / Level'] >= 4]   # Detailed breakdown
+```
+
+**Common Level 1 items:** Tržby, Hrubá marže, EBITDA, EBIT, Čistý zisk
+
+---
+
+### 2. P&L KEYWORDS → ROW NAMES:
+User says → Filter `'Název řádku'` column:
+
+| User says | Filter for |
+|-----------|------------|
+| tržby, revenue | Tržby |
+| marže, margin | Hrubá marže, Marže |
+| ebitda | EBITDA |
+| ebit | EBIT |
+| zisk, profit | Čistý zisk, Zisk |
+| náklady, costs | Náklady, Provozní náklady |
+| odpisy | Odpisy |
+
+```python
+# Fuzzy match for P&L items:
+keyword = 'ebitda'
+pl_filtered = pl[pl['Název řádku'].str.lower().str.contains(keyword, na=False)]
+```
+
+---
+
+### 3. OVERHEAD DIMENSIONS:
+**Key columns:**
+- `'Nákladové středisko / Cost center'` - department codes
+- `'Název / Name'` - cost center names
+- `'Druh nákladu / Cost type'` - expense categories (mzdy, nájmy, marketing...)
+
+```python
+overhead = Overhead.copy()
+# By cost center:
+by_center = overhead.groupby('Název / Name')[date_cols].sum()
+# By cost type:
+by_type = overhead.groupby('Druh nákladu / Cost type')[date_cols].sum()
+```
+
+---
+
+### 4. HEADCOUNT:
+**Key columns:**
+- `'Oddělení / Department'`
+- `'Pozice / Position'`
+- `'Typ úvazku / Contract type'`
+
+```python
+hc = HeadCount.copy()
+# Monthly headcount = sum of date column values
+total_jan = hc['01.01.2024'].sum()
+by_dept = hc.groupby('Oddělení / Department')['01.01.2024'].sum()
+```
+
+---
+
+### 5. CROSS-DATASET CALCULATIONS:
+
+**Náklady na zaměstnance (cost per employee):**
+```python
+overhead = Overhead.copy()
+hc = HeadCount.copy()
+wage_costs = overhead[overhead['Druh nákladu / Cost type'].str.contains('mzd', case=False, na=False)]
+total_wages = wage_costs[jan_col].sum()
+total_hc = hc[jan_col].sum()
+cost_per_emp = total_wages / total_hc
+```
+
+**Overhead vs Revenue ratio:**
+```python
+pl = PL.copy()
+overhead = Overhead.copy()
+revenue = pl[(pl['Název řádku'].str.contains('Tržby', na=False)) & (pl['Úroveň / Level'] == 1)][jan_col].sum()
+total_overhead = overhead[jan_col].sum()
+ratio = total_overhead / revenue * 100
+```
+
+---
+
+### 6. YoY COMPARISONS:
+```python
+jan_2024 = '01.01.2024'
+jan_2023 = '01.01.2023'
+
+value_2024 = pl[pl['Název řádku'] == 'EBITDA'][jan_2024].sum()
+value_2023 = pl[pl['Název řádku'] == 'EBITDA'][jan_2023].sum()
+yoy_change = ((value_2024 - value_2023) / abs(value_2023) * 100) if value_2023 != 0 else 0
+```
+
+---
+
+### 7. FORMATTING:
+- Amounts in thousands/millions: `12 345 678` → `12.3 mil. Kč`
+- Percentages: always 1 decimal: `15.3%`
+- Negative values in parentheses for costs: `(1 234 567)`
+"""
+
+# Backward compatibility alias
+ACCOUNTING_ECOSYSTEM_INSTRUCTIONS = ACCOUNTING_INSTRUCTIONS
+
+# Backward compatibility alias
+ACCOUNTING_ECOSYSTEM_INSTRUCTIONS = ACCOUNTING_INSTRUCTIONS
+
+# Backward compatibility alias
+ACCOUNTING_ECOSYSTEM_INSTRUCTIONS = ACCOUNTING_INSTRUCTIONS

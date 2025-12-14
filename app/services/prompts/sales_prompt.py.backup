@@ -1,0 +1,148 @@
+"""
+Wilco SaaS - Sales Ecosystem Prompt Module (OPTIMIZED)
+Instructions for Sales.csv, Documents.csv, M3.csv, Bridge_Shipping_Types.csv
+"""
+
+# Empty for backward compatibility - context not needed for code generation
+ALZA_CONTEXT = ""
+
+SALES_ECOSYSTEM_INSTRUCTIONS = """
+## SALES ECOSYSTEM RULES
+
+### DATASETS:
+- **Sales.csv** = Revenue (tržby)
+- **Documents.csv** = Order counts (počty objednávek)  
+- **M3.csv** = Gross margin (marže)
+- **Bridge_Shipping_Types.csv** = Shipping type mapping
+
+**Key formulas:**
+- Košík (AOV) = Sales / Documents
+- Marže % = M3 / Sales × 100
+
+All datasets share same dimensions and WIDE format.
+
+---
+
+### 1. FUZZY MATCHING (ALWAYS!):
+Users type values differently: "ApplePay", "apple pay", "APPLE PAY"
+
+```python
+# ✅ CORRECT - fuzzy match:
+user_input = 'ApplePay'
+normalized = user_input.lower().replace(' ', '')
+filtered = sales[sales['Payment detail name'].str.lower().str.replace(' ', '').str.contains(normalized, na=False)]
+
+# ❌ WRONG - exact match fails:
+filtered = sales[sales['Payment detail name'] == 'ApplePay']  # Returns 0!
+```
+
+Apply to ALL user values: Payment, Shipping, Catalogue segment, Sourcing, Source platform.
+
+---
+
+### 2. "SEGMENT" = PRODUCT SEGMENT (DEFAULT!):
+When user says "segmenty" without clarification → use `'Catalogue segment 1'` (Telefony, TV, Počítače...)
+NOT B2B/B2C (only 2 rows).
+
+Only use B2B/B2C when user explicitly says "B2B", "B2C", "firemní", "zákaznické segmenty".
+
+---
+
+### 3. B2B/B2C DETECTION:
+Column: `'Customer is business customer (IN/TIN)'`
+
+```python
+B2B_VALUE = "Customer is business customer (IN/TIN)"
+B2C_VALUE = "Customer is not business customer (IN/TIN)"
+
+b2b = sales[sales['Customer is business customer (IN/TIN)'] == B2B_VALUE]
+b2c = sales[sales['Customer is business customer (IN/TIN)'] == B2C_VALUE]
+```
+
+---
+
+### 4. ALZAPLUS+ MEMBERSHIP:
+Column: `'AlzaPlus+'`
+
+```python
+ALZAPLUS_MEMBER = "AlzaPlus+"
+ALZAPLUS_NON_MEMBER = "Customer is not member of AlzaPlus+ program"
+
+members = sales[sales['AlzaPlus+'] == ALZAPLUS_MEMBER]
+non_members = sales[sales['AlzaPlus+'] == ALZAPLUS_NON_MEMBER]
+```
+
+---
+
+### 5. GEOGRAPHY:
+Column: `'Eshop site country'`
+Values: "Czech Republic", "Slovakia", "Hungary", "Austria", "Germany"
+Use exact: `"Czech Republic"` (NOT "Czechia", "CZ", "Česko")
+
+---
+
+### 6. SHIPPING TYPES (Bridge table):
+
+**User synonyms - ALL mean ShippingType analysis:**
+- "doprava", "typ dopravy", "způsob dopravy", "podle dopravy"
+- "doručení", "typ doručení", "způsob doručení"
+
+**Bridge columns (case-sensitive!):**
+- `Shipping name` (AlzaExpres, Pobočka Holešovice, DPD)
+- `Shipping detail name` (Ráno, Blesk, AlzaBox)
+- `ShippingType` (AlzaBox, Pobočka, Balíkovka, RPL, Nadrozměr)
+
+```python
+bridge = Bridge_Shipping_Types.copy()
+sales_with_type = sales.merge(
+    bridge[['Shipping name', 'Shipping detail name', 'ShippingType']],
+    on=['Shipping name', 'Shipping detail name'],
+    how='left'
+)
+result = sales_with_type.groupby('ShippingType')[date_cols].sum()
+```
+
+---
+
+### 7. KOŠÍK (AOV) - Average Order Value:
+**CRITICAL: Documents DataFrame ALWAYS exists together with Sales!**
+
+```python
+# Basic AOV calculation:
+sales = Sales.copy()
+docs = Documents.copy()  # ALWAYS use directly, no condition!
+
+jan_col = '01.01.2024'
+for col in [jan_col]:
+    sales[col] = pd.to_numeric(sales[col], errors='coerce').fillna(0)
+    docs[col] = pd.to_numeric(docs[col], errors='coerce').fillna(0)
+
+aov = sales[jan_col].sum() / docs[jan_col].sum()
+```
+
+**With filter (apply SAME filter to both!):**
+```python
+sales_plus = sales[sales['AlzaPlus+'] == "AlzaPlus+"]
+docs_plus = docs[docs['AlzaPlus+'] == "AlzaPlus+"]
+aov_plus = sales_plus[jan_col].sum() / docs_plus[jan_col].sum()
+```
+
+---
+
+### 8. MARŽE %:
+```python
+sales_seg = sales.groupby('Catalogue segment 1')[jan_col].sum()
+m3_seg = m3.groupby('Catalogue segment 1')[jan_col].sum()
+margin_pct = (m3_seg / sales_seg * 100).fillna(0)
+```
+Apply SAME filters to both Sales and M3!
+
+---
+
+### 9. SHARED COLUMNS:
+All Sales ecosystem datasets have:
+- `Eshop site country`, `Customer is business customer (IN/TIN)`, `AlzaPlus+`
+- `Catalogue segment 1`, `Shipping name`, `Shipping detail name`
+- `Payment detail name`, `Sourcing`, `Source platform`
+- Date columns: `01.01.2024`, `01.02.2024`, etc.
+"""
