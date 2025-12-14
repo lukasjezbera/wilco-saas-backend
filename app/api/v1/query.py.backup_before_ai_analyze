@@ -357,7 +357,58 @@ async def execute_query(
                 # SIMPLIFIED PROMPT FOR DEEP DRILL-DOWN
                 context_section = f"""
 
-## 🔗 MULTI-LEVEL DRILL-DOWN CONTEXT (Level {chain_length})
+## 🔗 MULTI-LEVEL DRILL-DOWN CONTEXT
+
+**🚨 CRITICAL FOR LEVEL 3+ QUERIES:**
+
+When doing 3rd or more follow-up query:
+1. **Review ENTIRE query chain**, not just immediate previous!
+2. **Extract original filters from Query 1** (usually has main context)
+3. **Preserve these filters through all levels**
+
+**Example chain:**
+```
+Query 1: "Spotřeba materiálu a energie leden 2024" (PL.csv)
+  → Filters: Analytical account in [501200, 502100, ...], jan_col = '01.01.2024'
+  
+Query 2: "Top dodavatelé" (OVH.csv)
+  → Applied Query 1 filters ✅
+  → Result: Top 10 suppliers for materiál+energie
+  
+Query 3: "Jednotlivá ELD" (OVH.csv)
+  → MUST apply Query 1 filters (Analytical account) ✅
+  → OPTIONALLY filter by Query 2 results (top suppliers)
+  → ❌ WRONG: Only filtering by time (gets ALL ELD in Jan)
+```
+
+**Code template for Level 3:**
+```python
+# Load OVH
+ovh = OVH.copy()
+
+# Filter 1: TIME from Query 1
+jan_col = '01.01.2024'
+
+# Filter 2: ANALYTICAL ACCOUNT from Query 1  
+# Extract from Query 1 context (look for account numbers or Acc-Level categories)
+account_numbers = [501200, 502100, 502200, ...]  # From "materiál a energie"
+ovh_filtered = ovh[ovh['Analytical account'].isin(account_numbers)]
+
+# Filter 3 (optional): SUPPLIERS from Query 2
+# If Query 2 showed "top dodavatelé", could filter by those
+top_suppliers = ['ENIC s.r.o.', 'Pražská energetika', ...]
+ovh_filtered = ovh_filtered[ovh_filtered['Customer/company name'].isin(top_suppliers)]
+
+# Now get ELD details
+eld_details = ovh_filtered[ovh_filtered[jan_col] != 0]
+```
+
+**Key principle:** 
+- Query 1 establishes SCOPE (time + category)
+- Query 2+ drills down WITHIN that scope
+- Never lose the original scope!
+
+ (Level {chain_length})
 
 **Query Chain:**
 {chr(10).join([f"{i+1}. {q}" for i, q in enumerate(query_chain)])}
@@ -367,6 +418,11 @@ async def execute_query(
 ```python
 {query_request.context.get('code', 'N/A')}
 ```
+
+**🔍 DATASET DETECTION:**
+Previous code used: {"PL.csv" if "PL.copy()" in query_request.context.get('code', '') else "OVH.csv" if "OVH.copy()" in query_request.context.get('code', '') else "Sales.csv" if "Sales.copy()" in query_request.context.get('code', '') else "M3.csv" if "M3.copy()" in query_request.context.get('code', '') else "Unknown"}
+
+**⚠️ CONTINUE WITH THE SAME DATASET!**
 
 **Previous Result:** {query_request.context.get('result_summary', 'N/A').split('First result row:')[0]}
 
@@ -455,6 +511,15 @@ result = pd.DataFrame(results)
 {query_request.context.get('code', 'N/A')}
 ```
 
+**🔍 DATASET DETECTED IN PREVIOUS QUERY:**
+→ **Previous used: {'PL.csv (P&L)' if 'PL.copy()' in query_request.context.get('code', '') or 'pl = PL' in query_request.context.get('code', '').lower() else 'OVH.csv (detailed expenses)' if 'OVH.copy()' in query_request.context.get('code', '') or 'ovh = OVH' in query_request.context.get('code', '').lower() else 'M3.csv (margins)' if 'M3.copy()' in query_request.context.get('code', '') else 'Sales.csv (revenue)' if 'Sales.copy()' in query_request.context.get('code', '') else 'Documents.csv (orders)' if 'Documents.copy()' in query_request.context.get('code', '') else 'Unknown'}**
+
+**⚠️⚠️⚠️ CRITICAL: CONTINUE USING THE SAME DATASET!**
+- If previous used PL.csv → CONTINUE with PL.csv!
+- If previous used OVH.csv → CONTINUE with OVH.csv!
+- If previous used Sales.csv → CONTINUE with Sales.csv!
+- DO NOT switch datasets unless user explicitly asks!
+
 **Previous Result Summary:**
 {query_request.context.get('result_summary', 'N/A')}
 
@@ -467,7 +532,70 @@ result = pd.DataFrame(results)
    - Filters applied (segment, country, customer type)
    - Which datasets were used (one or multiple)
 
-3. **FOR MULTI-DATASET QUERIES (AOV, M3 marže):**
+
+3. **🚨 CRITICAL - CROSS-DATASET FOLLOW-UP (PL → OVH):**
+
+When previous query used **PL.csv** and current asks about **dodavatelé/suppliers/vendors**:
+
+**YOU MUST:**
+- Switch to **OVH.csv** (has supplier details in "Customer/company name")
+- **APPLY TIME FILTER** from previous query
+- **USE Acc-Level 1 or 2** for category filtering (NOT Acc-Level 3!)
+
+**⚠️ CRITICAL - How to link PL.csv and OVH.csv:**
+
+Use **"Analytical account"** field - it's the SAME in both datasets!
+- "Analytical account" = Account number (501200, 502100, etc.)
+- ✅ EXACT match between PL and OVH
+- ✅ Most precise way to filter
+
+**Alternative (if needed):**
+- Acc-Level 1: SAME in both ✅ ("Režijní náklady")
+- Acc-Level 2: SAME in both ✅ ("Spotřeba materiálu a služeb")
+- Acc-Level 3: DIFFERENT ❌ (PL has "Materiál", OVH has "Office supplies")
+
+**🔥 BEST PRACTICE - Use Analytical account:**
+
+**Example:**
+```python
+Previous PL query: "Spotřeba materiálu a energie v lednu 2024"
+  - Filtered: pl[pl['Acc-Level 3'].isin(['Materiál', 'Energie'])]
+  - Got accounts: 501200, 502100, 502200, etc.
+  
+Current OVH query: "Top dodavatelé"
+
+# ✅ BEST - Use Analytical account (most precise):
+ovh = OVH.copy()
+jan_col = '01.01.2024'
+
+# Extract account numbers from previous PL filter
+pl_previous = pl[pl['Acc-Level 3'].isin(['Materiál', 'Energie'])]
+account_numbers = pl_previous['Analytical account'].unique()
+
+# Apply to OVH
+ovh_filtered = ovh[ovh['Analytical account'].isin(account_numbers)]
+suppliers = ovh_filtered.groupby('Customer/company name')[jan_col].sum()
+top_suppliers = suppliers.nlargest(10)
+
+# ✅ ALTERNATIVE - Use Acc-Level 2 (broader):
+ovh_filtered = ovh[ovh['Acc-Level 2'] == 'Spotřeba materiálu a služeb']
+
+# ❌ WRONG - Using Acc-Level 3:
+ovh_filtered = ovh[ovh['Acc-Level 3'].isin(['Materiál', 'Energie'])]  # Empty!
+```
+
+**Summary:**
+1. BEST: Use "Analytical account" for precise filtering
+2. GOOD: Use "Acc-Level 1" or "Acc-Level 2" for broader filtering
+3. NEVER: Use "Acc-Level 3" across datasets (different values!)
+
+**Why OVH.csv?**
+- PL.csv = Aggregated P&L (no supplier names)
+- OVH.csv = Detailed expense documents with suppliers
+- To see WHO we paid, use OVH.csv!
+
+
+4. **FOR MULTI-DATASET QUERIES (AOV, M3 marže):**
    
    If previous used TWO datasets (e.g., Sales + M3):
    - Apply filters to BOTH datasets
@@ -485,9 +613,9 @@ result = pd.DataFrame(results)
    b2b_margin = b2b_m3[col].sum() / b2b_sales[col].sum() * 100
    ```
 
-4. **REUSE FILTERS:** Apply same filters in new code!
+5. **REUSE FILTERS:** Apply same filters in new code!
 
-5. **BUILD UPON RESULTS:** Drill down the SAME data, not different period!
+6. **BUILD UPON RESULTS:** Drill down the SAME data, not different period!
 """
             prompt += context_section
         

@@ -368,6 +368,11 @@ async def execute_query(
 {query_request.context.get('code', 'N/A')}
 ```
 
+**🔍 DATASET DETECTION:**
+Previous code used: {"PL.csv" if "PL.copy()" in query_request.context.get('code', '') else "OVH.csv" if "OVH.copy()" in query_request.context.get('code', '') else "Sales.csv" if "Sales.copy()" in query_request.context.get('code', '') else "M3.csv" if "M3.copy()" in query_request.context.get('code', '') else "Unknown"}
+
+**⚠️ CONTINUE WITH THE SAME DATASET!**
+
 **Previous Result:** {query_request.context.get('result_summary', 'N/A').split('First result row:')[0]}
 
 ---
@@ -454,6 +459,15 @@ result = pd.DataFrame(results)
 ```python
 {query_request.context.get('code', 'N/A')}
 ```
+
+**🔍 DATASET DETECTED IN PREVIOUS QUERY:**
+→ **Previous used: {'PL.csv (P&L)' if 'PL.copy()' in query_request.context.get('code', '') or 'pl = PL' in query_request.context.get('code', '').lower() else 'OVH.csv (detailed expenses)' if 'OVH.copy()' in query_request.context.get('code', '') or 'ovh = OVH' in query_request.context.get('code', '').lower() else 'M3.csv (margins)' if 'M3.copy()' in query_request.context.get('code', '') else 'Sales.csv (revenue)' if 'Sales.copy()' in query_request.context.get('code', '') else 'Documents.csv (orders)' if 'Documents.copy()' in query_request.context.get('code', '') else 'Unknown'}**
+
+**⚠️⚠️⚠️ CRITICAL: CONTINUE USING THE SAME DATASET!**
+- If previous used PL.csv → CONTINUE with PL.csv!
+- If previous used OVH.csv → CONTINUE with OVH.csv!
+- If previous used Sales.csv → CONTINUE with Sales.csv!
+- DO NOT switch datasets unless user explicitly asks!
 
 **Previous Result Summary:**
 {query_request.context.get('result_summary', 'N/A')}

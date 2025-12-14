@@ -1,0 +1,178 @@
+
+## ⚠️⚠️⚠️ CRITICAL: PL.csv & OVH.csv - P&L DATASETS ⚠️⚠️⚠️
+
+**DATASETS:**
+- **PL.csv** = Profit & Loss statement (agregované účty)
+- **OVH.csv** = Detailed expense documents (jednotlivé doklady)
+
+**VALUES ARE NEGATIVE** (expenses are shown as negative numbers):
+- Energy: -14,280.54 CZK
+- Materials: -2,744.81 CZK
+- DO NOT convert to positive! Keep negative values!
+
+---
+
+### **PL.csv STRUCTURE - EXPENSE HIERARCHY:**
+
+**Account classification:**
+
+Account class = 5 → ALL expenses (všechny náklady)
+
+Acc-Level 1 → TOP CATEGORY (exact values in PL.csv):
+  - "Režijní náklady" (overhead costs) ← MOST COMMON!
+  - "Náklady na zboží" (cost of goods sold)
+  - "Reklama" (marketing/advertising)
+  - "Finančnì výnosy a náklady" (financial income/expenses)
+  - "IC výnosy a náklady mimo zboží" (intercompany)
+  - "Mimořádné výnosy a náklady" (extraordinary items)
+  - "SK finanční náklady" (SK financial costs)
+  - "Bad Debt Provision" (provisions)
+  - "Výnosy reporting" (revenue reporting)
+  - "Missing value" (uncategorized)
+
+Acc-Level 2 → SUB-CATEGORY:
+  - "Spotřeba materiálu a služeb"
+  - "Personální náklady"
+  - "Budovy a zařízení"
+  - etc.
+
+Acc-Level 3 → DETAIL:
+  - "Materiál", "Energie", "Cestovné", "Telefony, internet, poštovné", etc.
+
+**Analytical account - name** = Detailed description (e.g., "Spotřeba energie - elektřina")
+
+---
+
+### **🔴 CRITICAL FILTERING RULES:**
+
+**WHEN USER ASKS:**
+
+1. **"Režijní náklady"** → Filter: Acc-Level 1 == "Režijní náklady"
+   ```python
+   pl_regime = pl[pl['Acc-Level 1'] == 'Režijní náklady']
+   ```
+
+2. **"Náklady na energii"** → Filter: Acc-Level 3 == "Energie" OR Analytical account - name contains "energie"
+   ```python
+   pl_energy = pl[(pl['Acc-Level 3'] == 'Energie') | 
+                  (pl['Analytical account - name'].str.contains('energie', case=False, na=False))]
+   ```
+
+3. **"Všechny náklady"** / "Celkové náklady" → Filter: Account class == 5
+   ```python
+   pl_all = pl[pl['Account class'] == 5]
+   ```
+
+4. **"Náklady na cestovné"** → Filter: Acc-Level 3 == "Cestovné" OR fuzzy match in Analytical account - name
+
+5. **"Náklady podle středisek"** → Group by CC-Level 1 (cost center)
+   ```python
+   result = pl.groupby('CC-Level 1')[date_cols].sum()
+   ```
+
+---
+
+### **🔴 CRITICAL - FUZZY MATCHING FOR Acc-Level 1:**
+
+When user asks for expense category, use case-insensitive partial matching:
+
+**User says → Filter:**
+- "režijní" → pl[pl['Acc-Level 1'].str.contains('režijní', case=False, na=False)]
+- "náklady na zboží" → pl[pl['Acc-Level 1'].str.contains('zboží', case=False, na=False)]
+- "reklama" → pl[pl['Acc-Level 1'].str.contains('reklam', case=False, na=False)]
+- "finanční" → pl[pl['Acc-Level 1'].str.contains('finanč', case=False, na=False)]
+
+**ALWAYS use fuzzy matching, NOT exact match!**
+
+---
+
+### **KEY DIMENSIONS:**
+
+**Organization:**
+- Accounting unit name = Company (Alza.at GmbH, Alza.cz s.r.o., etc.)
+
+**Cost Centers:**
+- CC-Level 1 = Main cost center (ALZABOX, CENTRÁLA, NAKUP, LOGISTIKA, etc.)
+
+**Accounts:**
+- Account class = Account type (5 = expenses)
+- Analytical account = Account number (501 200, 502 100, etc.)
+- Acc-Level 1/2/3 = Hierarchy of expense categories
+- Account class - name = "Náklady"
+- Analytical account - name = Detailed description
+
+---
+
+### **OVH.csv EXTRA DIMENSIONS:**
+
+OVH.csv has same structure as PL.csv PLUS:
+
+- CC-Level 2 = Sub cost center (ALZABOX_AT, ALZABOX_CZ, etc.)
+- Customer/company name = **SUPPLIER** (Figolock s.r.o., KPK Reklama, etc.)
+  - ⚠️ NOT customer! This is the VENDOR/SUPPLIER!
+- Electronic document key = Invoice number (ELD7204100, ELD5724723, etc.)
+- Document item description = Item detail ("Small material", "Stickers", etc.)
+- Project key = Project code (PROJ18826, PROJ-1, etc.)
+
+**WHEN USER ASKS:**
+- "Top dodavatelé" / "Top suppliers" → Group by Customer/company name (it's supplier!)
+- "Projekt PROJ18826" → Filter: Project key == "PROJ18826"
+- "Doklad ELD..." → Filter: Electronic document key == "ELD..."
+
+---
+
+### **DATE COLUMNS:**
+- PL.csv: 01.01.2024 through 01.12.2025 (WIDE format)
+- OVH.csv: 01.01.2024 through 01.11.2025 (WIDE format)
+- Same structure as Sales.csv!
+
+---
+
+### **EXAMPLES:**
+
+**Example 1: Režijní náklady podle středisek**
+```python
+Query: "Režijní náklady podle středisek v lednu 2024"
+
+# ✅ CORRECT:
+pl_regime = pl[pl['Acc-Level 1'] == 'Režijní náklady']
+result = pl_regime.groupby('CC-Level 1')['01.01.2024'].sum()
+
+# ❌ WRONG:
+pl_all = pl[pl['Account class'] == 5]  # This gets ALL expenses, not just režijní!
+```
+
+**Example 2: Náklady na energii**
+```python
+Query: "Náklady na energii v roce 2024"
+
+# ✅ CORRECT:
+pl_energy = pl[(pl['Acc-Level 3'] == 'Energie') | 
+               (pl['Analytical account - name'].str.contains('energie', case=False, na=False))]
+
+date_cols_2024 = [col for col in pl_energy.columns if '2024' in col]
+total = pl_energy[date_cols_2024].sum().sum()
+```
+
+**Example 3: Top dodavatelé (OVH.csv)**
+```python
+Query: "Top 5 dodavatelů podle nákladů v roce 2024"
+
+# ✅ Use OVH.csv, not PL.csv!
+ovh = OVH.copy()
+
+date_cols_2024 = [col for col in ovh.columns if '2024' in col]
+suppliers = ovh.groupby('Customer/company name')[date_cols_2024].sum(axis=1)
+top5 = suppliers.nlargest(5)  # Most negative = highest costs
+```
+
+---
+
+### **⚠️ IMPORTANT NOTES:**
+
+1. **Negative values = expenses** - DO NOT convert to positive!
+2. **"Customer/company name" in OVH.csv = SUPPLIER**, not customer!
+3. **Always filter by Acc-Level hierarchy** when user mentions specific expense category
+4. **Use fuzzy matching** for expense names (case-insensitive, partial match)
+5. **Missing value** in OVH.csv Customer/company name = Unknown supplier
+

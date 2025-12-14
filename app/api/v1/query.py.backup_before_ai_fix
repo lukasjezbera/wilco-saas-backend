@@ -2,11 +2,10 @@
 Query API Endpoints
 Main query execution and history with dataset integration
 MODIFIED: History caching DISABLED - queries always fresh!
-ADDED: Speech-to-Text transcription endpoint with OpenAI Whisper + ffmpeg conversion
+ADDED: Speech-to-Text transcription endpoint with OpenAI Whisper
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import pandas as pd
 import time
@@ -32,30 +31,6 @@ from app.core.claude_service import ClaudeService
 from app.core.config import settings
 from app.services.prompt_service import build_business_prompt
 
-# ==========================================
-# AI ANALYST CHAT - Schemas
-# ==========================================
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-class ChatContext(BaseModel):
-    query_text: str
-    summary: str
-    key_findings: List[str]
-    recommendations: List[dict]
-    risks: List[str]
-    opportunities: List[str]
-
-class ChatRequest(BaseModel):
-    message: str
-    context: ChatContext
-    conversation_history: List[ChatMessage] = []
-
-class ChatResponse(BaseModel):
-    response: str
-    success: bool = True
 
 router = APIRouter(prefix="/query", tags=["Query"])
 
@@ -348,105 +323,9 @@ async def execute_query(
         # 🔗 ADD CONTEXT FROM PREVIOUS QUERY
         # ==========================================
         if query_request.context:
-            # Extract query chain if available
-            query_chain = query_request.context.get('query_chain', [])
-            chain_length = len(query_chain) + 1  # +1 for current query
-            
-            # 🆕 OPTIMIZE: Use simplified prompt for deep drill-down (3+ levels)
-            if chain_length >= 3:
-                # SIMPLIFIED PROMPT FOR DEEP DRILL-DOWN
-                context_section = f"""
+            context_section = f"""
 
-## 🔗 MULTI-LEVEL DRILL-DOWN CONTEXT (Level {chain_length})
-
-**Query Chain:**
-{chr(10).join([f"{i+1}. {q}" for i, q in enumerate(query_chain)])}
-→ **CURRENT:** {query_request.query}
-
-**Previous Code (EXTRACT FILTERS FROM THIS):**
-```python
-{query_request.context.get('code', 'N/A')}
-```
-
-**Previous Result:** {query_request.context.get('result_summary', 'N/A').split('First result row:')[0]}
-
----
-
-## ⚠️ CRITICAL RULES FOR LEVEL {chain_length}:
-
-**1. EXTRACT & REUSE ALL FILTERS:**
-- Find time column from previous code (e.g., `col = '01.01.2024'`)
-- Find which datasets were used (M3, Sales, Documents, etc.)
-- Identify ALL dimension filters already applied
-
-**2. CREATE CROSS-DIMENSIONAL BREAKDOWN:**
-- Level {chain_length} MUST combine ALL previous dimensions + new dimension
-- Example for 3 levels (Time → Customer Type → AlzaPlus):
-  * AlzaPlus + B2B
-  * AlzaPlus + B2C
-  * Non-AlzaPlus + B2B
-  * Non-AlzaPlus + B2C
-
-**3. APPLY FILTERS TO ALL DATASETS:**
-If previous code used multiple datasets (e.g., M3 + Sales for margin):
-```python
-# ✅ CORRECT - Apply filters to BOTH datasets:
-m3_filtered = m3[(m3['AlzaPlus+'] == 'AlzaPlus+') & (m3['Customer is business'] == 'Yes')]
-sales_filtered = sales[(sales['AlzaPlus+'] == 'AlzaPlus+') & (sales['Customer is business'] == 'Yes')]
-```
-
-**4. CODE TEMPLATE:**
-```python
-import pandas as pd
-
-# Load datasets (same as previous)
-m3 = M3.copy()
-sales = Sales.copy()
-
-# Extract time column from previous code
-col = '01.01.2024'  # ← COPY FROM PREVIOUS CODE!
-
-# Create combinations of ALL dimensions
-results = []
-
-for dimension1_val in ['Value1', 'Value2']:  # Previous dimension
-    for dimension2_val in ['ValueA', 'ValueB']:  # New dimension
-        # Filter BOTH datasets with ALL filters
-        m3_subset = m3[(m3['Dim1'] == dimension1_val) & (m3['Dim2'] == dimension2_val)]
-        sales_subset = sales[(sales['Dim1'] == dimension1_val) & (sales['Dim2'] == dimension2_val)]
-        
-        # Calculate metric (same formula as previous)
-        m3_value = m3_subset[col].sum()
-        sales_value = sales_subset[col].sum()
-        margin_pct = (m3_value / sales_value * 100) if sales_value > 0 else 0
-        
-        results.append({{
-            'Segment': f'{{dimension2_val}} + {{dimension1_val}}',
-            'M3 marže (Kč)': m3_value,
-            'Tržby (Kč)': sales_value,
-            'M3 marže %': margin_pct
-        }})
-
-result = pd.DataFrame(results)
-```
-
-**REMEMBER:** Use EXACT same time column and datasets as previous code!
-"""
-            else:
-                # STANDARD PROMPT FOR LEVELS 1-2
-                query_chain_text = ""
-                if query_chain and len(query_chain) > 0:
-                    query_chain_text = f"""
-**🔗 QUERY CHAIN:**
-{chr(10).join([f"{i+1}. {q}" for i, q in enumerate(query_chain)])}
-→ Current: {query_request.query}
-"""
-                
-                context_section = f"""
-
-## ⚠️ CONTEXT FROM PREVIOUS QUERY
-
-{query_chain_text}
+## ⚠️⚠️⚠️ CRITICAL CONTEXT FROM PREVIOUS QUERY ⚠️⚠️⚠️
 
 **Previous Question:** {query_request.context.get('query', 'N/A')}
 
@@ -458,36 +337,21 @@ result = pd.DataFrame(results)
 **Previous Result Summary:**
 {query_request.context.get('result_summary', 'N/A')}
 
-**🔴 FOLLOW-UP RULES:**
+**🔴 CRITICAL INSTRUCTIONS FOR FOLLOW-UP:**
+1. **MAINTAIN THE SAME SCOPE:** If previous query was for a specific time period (e.g., "únor 2024"), the follow-up MUST use the SAME time period!
+2. **EXTRACT FILTERS FROM PREVIOUS CODE:** Look at the previous code to identify:
+   - Which date columns were used (e.g., `date_cols = ['01.02.2024']`)
+   - What filters were applied (e.g., segment, country, customer type)
+   - What time period was analyzed
+3. **REUSE THOSE EXACT FILTERS:** Apply the same filters in your new code!
+4. **BUILD UPON RESULTS:** The user wants to drill down or pivot the SAME data, not analyze a different dataset!
 
-1. **MAINTAIN SCOPE:** Use the SAME time period from previous query!
+**Example:**
+If previous query was "Tržby v únoru 2024" and analyzed `['01.02.2024', '02.02.2024', ...]`,
+and follow-up is "Rozdělení B2B vs B2C",
+then your code MUST use the SAME February date columns, NOT all 2024 columns!
 
-2. **EXTRACT FILTERS:** From previous code, identify:
-   - Date columns (e.g., `col = '01.05.2025'`)
-   - Filters applied (segment, country, customer type)
-   - Which datasets were used (one or multiple)
-
-3. **FOR MULTI-DATASET QUERIES (AOV, M3 marže):**
-   
-   If previous used TWO datasets (e.g., Sales + M3):
-   - Apply filters to BOTH datasets
-   - Use SAME time column on both
-   
-   Example:
-   ```python
-   m3 = M3.copy()
-   sales = Sales.copy()
-   col = '01.05.2025'  # ← SAME as previous
-   
-   # B2B - filter BOTH datasets:
-   b2b_m3 = m3[m3['Customer is business customer (IN/TIN)'] == 'Customer is business customer (IN/TIN)']
-   b2b_sales = sales[sales['Customer is business customer (IN/TIN)'] == 'Customer is business customer (IN/TIN)']
-   b2b_margin = b2b_m3[col].sum() / b2b_sales[col].sum() * 100
-   ```
-
-4. **REUSE FILTERS:** Apply same filters in new code!
-
-5. **BUILD UPON RESULTS:** Drill down the SAME data, not different period!
+**DO NOT** expand the time period unless explicitly asked!
 """
             prompt += context_section
         
@@ -683,31 +547,21 @@ CRITICAL: Use this exact pattern for time-series queries. Do NOT use melt/unpivo
         print(f"✅ Query executed in {execution_time_ms}ms\n")
         
         # ==========================================
-        # 🆕 GENERATE AI INSIGHTS (ON-DEMAND ONLY)
+        # 🆕 GENERATE AI INSIGHTS
         # ==========================================
         ai_insights = None
-        if success and result_json and query_request.generate_insights:  # ← Only when user requests!
-            # Get DataFrame for analysis (before JSON conversion)
-            try:
-                # result_value is the DataFrame we extracted from exec
-                insights_df = result_value if isinstance(result_value, pd.DataFrame) else None
-                
-                if insights_df is not None:
-                    print(f"🤖 Generating AI business insights (on-demand)...")
-                    insights_result = await generate_business_insights(
-                        query=query_request.query,
-                        result_df=insights_df,
-                        tenant_context=None  # Can add per-tenant context later
-                    )
-                    if insights_result["success"]:
-                        ai_insights = insights_result["insights"]
-                        print(f"✅ AI Insights ready")
-                    else:
-                        print(f"⚠️ AI Insights failed: {insights_result.get('error')}")
-            except Exception as e:
-                print(f"⚠️ AI Insights generation error: {e}")
-        elif success and result_json and not query_request.generate_insights:
-            print(f"ℹ️ AI Insights skipped (not requested)")
+        if success and result_json and 'result' in locals():
+            print(f"🤖 Generating AI business insights...")
+            insights_result = await generate_business_insights(
+                query=query_request.query,
+                result_df=result,
+                tenant_context=None  # Can add per-tenant context later
+            )
+            if insights_result["success"]:
+                ai_insights = insights_result["insights"]
+                print(f"✅ AI Insights ready")
+            else:
+                print(f"⚠️ AI Insights failed: {insights_result.get('error')}")
         
         # Return response
         return QueryExecuteResponse(
@@ -827,13 +681,12 @@ def get_query_by_id(
 
 @router.post("/transcribe")
 async def transcribe_audio(
-    file: UploadFile = File(...)
+    audio: UploadFile = File(...)
     # TEMPORARILY DISABLED AUTH FOR TESTING
     # current_user: User = Depends(get_current_user)
 ):
     """
     Transcribe audio to text using OpenAI Whisper API
-    WITH FFMPEG CONVERSION FOR WEBM
     
     Accepts audio files in formats: mp3, mp4, mpeg, mpga, m4a, wav, webm
     Max file size: 25MB (OpenAI limit)
@@ -852,7 +705,7 @@ async def transcribe_audio(
     
     # Validate file type
     allowed_extensions = {'.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.wav', '.webm'}
-    file_ext = os.path.splitext(file.filename)[1].lower()
+    file_ext = os.path.splitext(audio.filename)[1].lower()
     
     if file_ext not in allowed_extensions:
         raise HTTPException(
@@ -863,12 +716,10 @@ async def transcribe_audio(
     # Check file size (25MB limit from OpenAI)
     MAX_SIZE = 25 * 1024 * 1024  # 25MB
     
-    mp3_path = None  # Track converted file for cleanup
-    
     try:
         # Save uploaded file to temporary location
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
-            content = await file.read()
+            content = await audio.read()
             
             if len(content) > MAX_SIZE:
                 raise HTTPException(
@@ -879,46 +730,18 @@ async def transcribe_audio(
             tmp_file.write(content)
             tmp_file_path = tmp_file.name
         
-        # Convert WebM to MP3 if needed (OpenAI doesn't support WebM well)
-        if file_ext == '.webm':
-            print(f"🔄 Converting WebM to MP3...")
-            mp3_path = tmp_file_path.replace('.webm', '.mp3')
-            
-            try:
-                import ffmpeg
-                
-                # Convert using ffmpeg
-                (
-                    ffmpeg
-                    .input(tmp_file_path)
-                    .output(mp3_path, acodec='libmp3lame', audio_bitrate='128k')
-                    .overwrite_output()
-                    .run(capture_stdout=True, capture_stderr=True)
-                )
-                
-                print(f"✅ Converted to MP3: {mp3_path}")
-                
-                # Use converted file for transcription
-                transcription_file = mp3_path
-                
-            except Exception as conv_err:
-                print(f"⚠️ FFmpeg conversion failed: {conv_err}")
-                print(f"Trying with original WebM file...")
-                transcription_file = tmp_file_path
-        else:
-            transcription_file = tmp_file_path
-        
         # Transcribe using OpenAI Whisper
         try:
             from openai import OpenAI
             
             client = OpenAI(api_key=settings.OPENAI_API_KEY)
             
-            with open(transcription_file, 'rb') as audio_file:
+            # Try WebM directly - OpenAI Whisper may accept it
+            with open(tmp_file_path, 'rb') as audio_file:
                 transcript = client.audio.transcriptions.create(
                     model=settings.OPENAI_WHISPER_MODEL,
                     file=audio_file,
-                    language="cs"
+                    language="cs"  # Czech language
                 )
             
             transcribed_text = transcript.text
@@ -938,11 +761,9 @@ async def transcribe_audio(
             )
         
         finally:
-            # Clean up temporary files
+            # Clean up temporary file
             try:
                 os.unlink(tmp_file_path)
-                if mp3_path and os.path.exists(mp3_path):
-                    os.unlink(mp3_path)
             except:
                 pass
     
@@ -951,106 +772,7 @@ async def transcribe_audio(
     except Exception as e:
         print(f"❌ Transcription request failed: {e}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e)
-        )
-
-
-# ==========================================
-# AI ANALYST CHAT ENDPOINT
-# ==========================================
-
-@router.post("/chat", response_model=ChatResponse)
-async def chat_with_analyst(
-    chat_request: ChatRequest,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Interactive chat with AI Analyst about query insights
-    
-    Accepts:
-    - message: User's question
-    - context: Insights context (summary, findings, recommendations, etc.)
-    - conversation_history: Previous messages in conversation
-    
-    Returns:
-    - response: AI analyst's answer in Czech
-    """
-    
-    try:
-        # Build system prompt with context
-        system_prompt = f"""Jsi zkušený business analytik, který pomáhá uživateli porozumět výsledkům jejich datové analýzy.
-
-**PŮVODNÍ DOTAZ:**
-{chat_request.context.query_text}
-
-**VÝSLEDKY ANALÝZY:**
-
-Shrnutí:
-{chat_request.context.summary}
-
-Klíčová zjištění:
-{chr(10).join(f"- {finding}" for finding in chat_request.context.key_findings)}
-
-Doporučení:
-{chr(10).join(f"- {rec.get('title', '')}: {rec.get('description', '')}" for rec in chat_request.context.recommendations)}
-
-Rizika:
-{chr(10).join(f"- {risk}" for risk in chat_request.context.risks)}
-
-Příležitosti:
-{chr(10).join(f"- {opp}" for opp in chat_request.context.opportunities)}
-
-**TVŮJ ÚKOL:**
-Uživatel se ptá na upřesňující otázky k této analýze. Odpovídej:
-- V češtině
-- Stručně a jasně
-- S konkrétními čísly a fakty z analýzy
-- Business-focused (zaměř se na akce a dopady)
-- Pokud informace v kontextu není, upřímně to řekni
-
-Buď profesionální, ale přátelský. Cílem je pomoci uživateli lépe pochopit data a udělat správná rozhodnutí.
-"""
-
-        # Build messages array
-        messages = []
-        
-        # Add conversation history
-        for msg in chat_request.conversation_history:
-            messages.append({
-                "role": msg.role,
-                "content": msg.content
-            })
-        
-        # Add current message
-        messages.append({
-            "role": "user",
-            "content": chat_request.message
-        })
-        
-        # Call Claude API
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1500,
-            system=system_prompt,
-            messages=messages
-        )
-        
-        assistant_response = response.content[0].text
-        
-        print(f"💬 AI Analyst Chat - User: {chat_request.message[:50]}... → AI: {assistant_response[:50]}...")
-        
-        return ChatResponse(
-            response=assistant_response,
-            success=True
-        )
-    
-    except Exception as e:
-        print(f"❌ AI Analyst Chat error: {e}")
-        raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get AI response: {str(e)}"
+            detail=f"Failed to process audio: {str(e)}"
         )
 

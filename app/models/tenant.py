@@ -86,6 +86,13 @@ class Tenant(Base):
         cascade="all, delete-orphan"
     )
     
+    settings = relationship(
+        "TenantSettings",
+        back_populates="tenant",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )
+    
     # ==========================================
     # METHODS
     # ==========================================
